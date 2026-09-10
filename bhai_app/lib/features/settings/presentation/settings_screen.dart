@@ -48,10 +48,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
       // Load Profile Cache details
       final rawProfile = _profileBox.get('user_data', defaultValue: {});
       final profile = Map<String, dynamic>.from(rawProfile as Map);
-      _nameController.text = profile['name'] as String? ?? 'Ananya Sharma';
-      _ageController.text = profile['age']?.toString() ?? '24';
-      _medicalController.text = profile['medical_condition'] as String? ?? 'None';
-      _notesController.text = profile['emergency_notes'] as String? ?? 'Call my parents immediately';
+      _nameController.text = profile['name'] as String? ?? '';
+      _ageController.text = profile['age']?.toString() ?? '';
+      _medicalController.text = profile['medical_condition'] as String? ?? '';
+      _notesController.text = profile['emergency_notes'] as String? ?? '';
       _selectedGender = profile['gender'] as String? ?? 'Female';
       _selectedBloodGroup = profile['blood_group'] as String? ?? 'O+';
     });
@@ -68,6 +68,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     };
 
     await _profileBox.put('user_data', profileData);
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Profile details updated successfully.')),
     );
@@ -78,11 +79,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _loadSettings();
   }
 
-  void _logout() async {
+  void _resetLocalSettings() async {
     await _settingsBox.clear();
     await _profileBox.clear();
     if (mounted) {
-      context.go('/login');
+      context.go('/home');
     }
   }
 
@@ -192,6 +193,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       onChanged: (val) => _updateSetting('dark_mode', val),
                     ),
                     SwitchListTile(
+                      title: const Text('Volunteer Helper Mode'),
+                      subtitle: const Text('Receive alerts when nearby community members need assistance'),
+                      value: _isVolunteer,
+                      activeColor: AppTheme.accentCyan,
+                      onChanged: (val) => _updateSetting('volunteer_mode', val),
+                    ),
+                    SwitchListTile(
                       title: const Text('Shake Sensor SOS'),
                       value: _isShakeEnabled,
                       activeColor: AppTheme.accentCyan,
@@ -214,18 +222,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
 
               const SizedBox(height: 30),
-              // 3. Destructive Logout Button
-              ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppTheme.accentCrimson.withOpacity(0.2),
-                  foregroundColor: AppTheme.accentCrimson,
-                  side: const BorderSide(color: AppTheme.accentCrimson),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.people_alt_outlined, color: AppTheme.accentCyan),
+                title: const Text('Trusted contacts', style: TextStyle(fontWeight: FontWeight.bold)),
+                subtitle: const Text('Choose who receives your emergency alert'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => context.push('/trusted-contacts'),
+              ),
+              const SizedBox(height: 16),
+              OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.grey,
+                  side: const BorderSide(color: Colors.white24),
                   minimumSize: const Size.fromHeight(48),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                 ),
-                icon: const Icon(Icons.exit_to_app),
-                label: const Text('Log Out Account'),
-                onPressed: _logout,
+                icon: const Icon(Icons.refresh),
+                label: const Text('Reset Local Settings'),
+                onPressed: _resetLocalSettings,
               ),
               const SizedBox(height: 30),
             ],

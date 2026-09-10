@@ -3,22 +3,25 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:bhai_app/features/home/presentation/home_screen.dart';
 
 void main() {
-  testWidgets('Home Dashboard renders elements correctly', (WidgetTester tester) async {
-    // Build the HomeScreen directly in a test environment wrapped in a Material parent
+  testWidgets('V1 Home Dashboard renders emergency elements correctly', (WidgetTester tester) async {
     await tester.pumpWidget(
       const MaterialApp(
         home: HomeScreen(),
       ),
     );
 
-    // Verify key titles are rendered
-    expect(find.text('BHAI SHIELD'), findsOneWidget);
-    
-    // Verify SOS button instructions are present
-    expect(find.text('SOS'), findsOneWidget);
-    expect(find.text('HOLD OR TAP TWICE'), findsOneWidget);
+    // Verify V1 title & emergency header
+    expect(find.text('BHAI'), findsOneWidget);
+    expect(find.text('EMERGENCY NEARBY ALERT'), findsOneWidget);
 
-    // Verify volunteer configuration switcher exists
-    expect(find.text('Volunteer Protection Mode'), findsOneWidget);
+    // Verify 🚨 BHAI HELP primary action button
+    expect(find.text('🚨 BHAI HELP'), findsOneWidget);
+    expect(find.text('TAP IN AN EMERGENCY'), findsOneWidget);
+
+    // Verify initial standby status
+    expect(
+      find.text('Standby • Ready to broadcast or detect nearby emergency alerts'),
+      findsOneWidget,
+    );
   });
 }

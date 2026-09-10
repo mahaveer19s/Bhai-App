@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:math';
+import 'package:flutter/foundation.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 
 class ShakeService {
@@ -35,7 +36,7 @@ class ShakeService {
         }
       },
       onError: (error) {
-        print('Accelerometer service error: $error');
+        debugPrint('Accelerometer service error: $error');
       },
       cancelOnError: true,
     );

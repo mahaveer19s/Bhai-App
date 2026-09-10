@@ -1,0 +1,37 @@
+name: BHAI CI Pipeline
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  backend-tests:
+    name: Backend Test Suite & Concurrency
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+          pip install pytest pytest-asyncio anyio
+
+      - name: Run Pytest Test Suite
+        env:
+          ENVIRONMENT: development
+          DEV_OTP_CODE: "000000"
+          JWT_SECRET: "ci-secret-jwt-key-bhai-emergency-testing-2026"
+          OTP_HMAC_SECRET: "ci-secret-otp-hmac-key-bhai-testing-2026"
+        run: |
+          cd backend
+          pytest -v

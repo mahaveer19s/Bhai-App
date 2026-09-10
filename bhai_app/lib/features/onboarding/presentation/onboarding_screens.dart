@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:contacts_service/contacts_service.dart';
 import '../../../core/theme/app_theme.dart';
 
 class OnboardingScreens extends StatefulWidget {
@@ -14,49 +13,26 @@ class OnboardingScreens extends StatefulWidget {
 class _OnboardingScreensState extends State<OnboardingScreens> {
   final PageController _pageController = PageController();
   int _currentPage = 0;
-  List<Contact> _importedContacts = [];
 
   final List<Map<String, String>> _onboardingData = [
     {
       'title': 'Welcome to BHAI',
-      'desc': 'Your Brother is Always With You. An AI-powered personal guardian working 24/7 in the background.',
+      'desc': 'A simple way to ask trusted contacts and nearby opted-in BHAI users for help when you feel unsafe.',
     },
     {
       'title': 'Volunteer Support Network',
-      'desc': 'Opt-in to the BHAI Community. Receive notifications to assist nearby victims, or share your alert with helpers.',
+      'desc': 'Opt in to receive nearby help requests. Your exact location is never shared with a helper until they choose to acknowledge an active emergency.',
     },
     {
       'title': 'Secure Platform Shield',
-      'desc': 'Your data is secured locally using AES-256 keys. We keep emergency records and location history encrypted.',
+      'desc': 'During an emergency, BHAI saves your last known location and location history for authorized responders. You control trusted contacts and helper availability.',
     }
   ];
 
   Future<void> _requestAllPermissions() async {
-    // Request critical permissions sequentially
+    // Request only the permissions needed for the selected safety features.
     await Permission.location.request();
     await Permission.notification.request();
-    await Permission.camera.request();
-    await Permission.microphone.request();
-    // SMS permission request (applicable on Android only)
-    await Permission.sms.request();
-  }
-
-  Future<void> _importContacts() async {
-    final permission = await Permission.contacts.request();
-    if (permission.isGranted) {
-      try {
-        final rawContacts = await ContactsService.getContacts();
-        final contacts = rawContacts.take(5).toList();
-        setState(() {
-          _importedContacts = contacts;
-        });
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Imported ${_importedContacts.length} emergency contacts successfully.')),
-        );
-      } catch (e) {
-        print('Error reading system contacts list: $e');
-      }
-    }
   }
 
   @override
@@ -122,35 +98,74 @@ class _OnboardingScreensState extends State<OnboardingScreens> {
   Widget _buildPermissionsSlide() {
     return Padding(
       padding: const EdgeInsets.all(24.0),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const Icon(Icons.settings_suggest_outlined, size: 80, color: AppTheme.accentCyan),
-          const SizedBox(height: 30),
-          Text(
-            'Security Access Rights',
-            style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(height: 15),
-          const Text(
-            'BHAI requires permissions to trace location, sound sirens, record incidents, and dispatch notifications in the background.',
-            textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 15),
-          ),
-          const SizedBox(height: 30),
-          ElevatedButton.icon(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppTheme.accentCyan,
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.security, size: 70, color: AppTheme.accentCyan),
+            const SizedBox(height: 20),
+            Text(
+              'Permissions Rationale',
+              style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.bold),
             ),
-            icon: const Icon(Icons.check_circle_outline),
-            label: const Text('Grant Essential Permissions'),
-            onPressed: _requestAllPermissions,
-          ),
-        ],
+            const SizedBox(height: 10),
+            const Text(
+              'Bhai needs these permissions so it can help you during an emergency, including when your phone has limited connectivity.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 14, color: Colors.grey),
+            ),
+            const SizedBox(height: 24),
+            _permissionTile('Location', 'Captures initial and live GPS position during active emergency mode.', Permission.location),
+            _permissionTile('Bluetooth / BLE', 'Discovers nearby opted-in devices to relay emergency alerts offline.', Permission.bluetoothScan),
+            _permissionTile('Notifications', 'Shows active emergency status and alerts you when a nearby user needs help.', Permission.notification),
+            const SizedBox(height: 24),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                OutlinedButton.icon(
+                  onPressed: _requestAllPermissions,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Request / Retry'),
+                ),
+                FilledButton.icon(
+                  onPressed: () => openAppSettings(),
+                  icon: const Icon(Icons.settings),
+                  label: const Text('System Settings'),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
+    );
+  }
+
+  Widget _permissionTile(String title, String desc, Permission permission) {
+    return FutureBuilder<PermissionStatus>(
+      future: permission.status,
+      builder: (context, snapshot) {
+        final granted = snapshot.data?.isGranted ?? false;
+        return Container(
+          margin: const EdgeInsets.symmetric(vertical: 6),
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(12)),
+          child: Row(
+            children: [
+              Icon(granted ? Icons.check_circle : Icons.warning_amber, color: granted ? Colors.green : Colors.orange),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
+                    Text(desc, style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -168,7 +183,7 @@ class _OnboardingScreensState extends State<OnboardingScreens> {
           ),
           const SizedBox(height: 15),
           const Text(
-            'Add up to 5 emergency contacts who will be immediately notified via SMS and App alerts on SOS triggers.',
+            'After secure sign-in, add the people you trust. BHAI will notify active trusted contacts when you confirm an emergency request.',
             textAlign: TextAlign.center,
             style: TextStyle(fontSize: 15),
           ),
@@ -181,17 +196,10 @@ class _OnboardingScreensState extends State<OnboardingScreens> {
               padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
             ),
-            icon: const Icon(Icons.contact_phone_outlined),
-            label: const Text('Import Contacts from Phone'),
-            onPressed: _importContacts,
+            icon: const Icon(Icons.shield),
+            label: const Text('Start Using Bhai'),
+            onPressed: () => context.go('/home'),
           ),
-          if (_importedContacts.isNotEmpty) ...[
-            const SizedBox(height: 20),
-            Text(
-              'Added ${_importedContacts.length} Contacts',
-              style: const TextStyle(fontWeight: FontWeight.bold),
-            ),
-          ]
         ],
       ),
     );
@@ -231,8 +239,7 @@ class _OnboardingScreensState extends State<OnboardingScreens> {
             ),
             onPressed: () {
               if (isLastPage) {
-                // Navigate to login screen
-                context.go('/login');
+                context.go('/home');
               } else {
                 _pageController.nextPage(
                   duration: const Duration(milliseconds: 300),

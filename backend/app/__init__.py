@@ -1,0 +1,1 @@
+"""BHAI emergency assistance API."""

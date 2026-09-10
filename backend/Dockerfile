@@ -1,20 +1,16 @@
-FROM alpine:3.18
+FROM python:3.12-slim
 
-ARG PB_VERSION=0.22.14
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
 
-RUN apk add --no-cache \
-    unzip \
-    ca-certificates \
-    curl
+WORKDIR /app
 
-# Download and unzip PocketBase
-ADD https://github.com/pocketbase/pocketbase/releases/download/v${PB_VERSION}/pocketbase_${PB_VERSION}_linux_amd64.zip /tmp/pb.zip
-RUN unzip /tmp/pb.zip -d /pb/ && rm /tmp/pb.zip
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Create volume directories
-RUN mkdir -p /pb/pb_data /pb/pb_public /pb/pb_migrations
+COPY app ./app
 
-EXPOSE 8080
+EXPOSE 8000
 
-# Start PocketBase and auto-import schema if a pb_schema.json exists in pb_migrations
-CMD ["/pb/pocketbase", "serve", "--http=0.0.0.0:8080"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

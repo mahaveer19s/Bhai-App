@@ -1,7 +1,12 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:go_router/go_router.dart';
-import 'package:hive_flutter/hive_flutter.dart';
-import '../../../core/theme/app_theme.dart';
+import 'package:flutter/services.dart';
+import 'package:geolocator/geolocator.dart';
+import '../../../../core/services/api_client.dart';
+import '../../../../core/services/bluetooth_service.dart';
+import '../../../../core/services/emergency_service.dart';
+import '../../../../core/theme/app_theme.dart';
+import '../../emergency/presentation/emergency_received_dialog.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -10,323 +15,1203 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
-  bool _isSosTriggered = false;
-  bool _isVolunteerMode = false;
-  String _currentAddress = 'Fetching current address...';
-  int _batteryLevel = 92;
-  String _networkStatus = 'LTE Excellent';
-  String _weather = 'Cloudy 28°C';
+class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateMixin {
+  final BluetoothService _bluetooth = BluetoothService();
+  final EmergencyService _emergencyService = EmergencyService();
+
+  bool _isBluetoothOn = true;
+  bool _isInternetOn = true;
+  bool _isLocationOn = true;
+  bool _hasPermissions = true;
+  bool _isBroadcastingSos = false;
+  bool _isActivating = false;
+  bool _isLiveLocationSharing = false;
+  bool _isLoadingNearby = false;
+  String? _liveSessionId;
+  Position? _currentPosition;
+  String? _emergencyId;
+  String _statusMessage = 'Standby • Ready to broadcast or detect nearby emergency alerts';
+  String? _acknowledgedHelperId;
+
+  StreamSubscription<BhaiEmergencyAlert>? _incomingAlertSub;
+  StreamSubscription<String>? _ackSub;
+  Timer? _statusCheckTimer;
+  late AnimationController _pulseController;
+  late Animation<double> _scaleAnimation;
+  bool _isAlertOpen = false;
 
   @override
   void initState() {
     super.initState();
-    _loadVolunteerState();
-    _fetchLocationDetails();
-  }
+    _pulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1000),
+    )..repeat(reverse: true);
 
-  void _loadVolunteerState() {
-    final box = Hive.box('settings');
-    setState(() {
-      _isVolunteerMode = box.get('volunteer_mode', defaultValue: false) as bool;
-    });
-  }
-
-  void _fetchLocationDetails() {
-    Future.delayed(const Duration(seconds: 2), () {
-      if (mounted) {
-        setState(() {
-          _currentAddress = 'Sector 62, Noida, UP, India';
-        });
-      }
-    });
-  }
-
-  void _toggleVolunteerMode(bool val) async {
-    final box = Hive.box('settings');
-    await box.put('volunteer_mode', val);
-    setState(() {
-      _isVolunteerMode = val;
-    });
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(_isVolunteerMode ? 'Volunteer Mode Enabled' : 'Volunteer Mode Disabled')),
+    _scaleAnimation = Tween<double>(begin: 1.0, end: 1.06).animate(
+      CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
     );
-    if (_isVolunteerMode) {
-      Future.delayed(const Duration(milliseconds: 500), () {
-        if (mounted) context.push('/volunteer');
+
+    _checkHardwareStatus();
+    _initStandby();
+
+    // Periodically refresh Bluetooth, Internet, and Location states
+    _statusCheckTimer = Timer.periodic(const Duration(seconds: 3), (_) {
+      _checkHardwareStatus();
+    });
+  }
+
+  @override
+  void dispose() {
+    _statusCheckTimer?.cancel();
+    _incomingAlertSub?.cancel();
+    _ackSub?.cancel();
+    _pulseController.dispose();
+    _bluetooth.stopStandbyMode();
+    if (_isLiveLocationSharing) {
+      _emergencyService.stopLiveLocationSharing();
+    }
+    super.dispose();
+  }
+
+  Future<void> _checkHardwareStatus() async {
+    final bt = await _bluetooth.isBluetoothEnabled();
+    final perm = await _bluetooth.hasPermissions();
+    final net = await _bluetooth.isInternetConnected();
+    final loc = await _bluetooth.isLocationEnabled();
+    if (mounted) {
+      setState(() {
+        _isBluetoothOn = bt;
+        _hasPermissions = perm;
+        _isInternetOn = net;
+        _isLocationOn = loc;
       });
     }
   }
 
-  void _triggerSos() {
-    setState(() {
-      _isSosTriggered = !_isSosTriggered;
+  Future<void> _initStandby() async {
+    // Start background presence and incoming alert listener
+    await _bluetooth.startStandbyMode();
+
+    _incomingAlertSub = _bluetooth.incomingAlertsStream.listen((alert) {
+      if (!_isAlertOpen && mounted) {
+        _isAlertOpen = true;
+        showDialog<void>(
+          context: context,
+          barrierDismissible: false,
+          builder: (ctx) => EmergencyReceivedDialog(alert: alert),
+        ).then((_) {
+          _isAlertOpen = false;
+        });
+      }
     });
-    if (_isSosTriggered) {
-      // In production, triggers the SOS Dispatch pipeline (audio/video, location tracking, background SMS, WhatsApp pre-fill)
+
+    _ackSub = _bluetooth.ackReceivedStream.listen((helperSenderId) {
+      if (mounted) {
+        setState(() {
+          _acknowledgedHelperId = helperSenderId;
+          _statusMessage = 'Helper BHAI-$helperSenderId confirmed: I AM COMING! 🏃';
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("🚨 Nearby Bhai Helper (BHAI-$helperSenderId) confirmed: I'M COMING!"),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 6),
+          ),
+        );
+      }
+    });
+  }
+
+  Future<void> _onBhaiHelpPressed() async {
+    if (_isBroadcastingSos) {
+      _confirmStopBroadcast();
+      return;
+    }
+
+    if (_isActivating) return;
+
+    // 1. Check Bluetooth state
+    final btEnabled = await _bluetooth.isBluetoothEnabled();
+    if (!btEnabled) {
+      setState(() {
+        _isBluetoothOn = false;
+        _statusMessage = 'Bluetooth is turned OFF. Please turn on Bluetooth to broadcast.';
+      });
+      await _bluetooth.requestEnableBluetooth();
+      return;
+    }
+
+    // 2. Check Permissions
+    final permGranted = await _bluetooth.hasPermissions();
+    if (!permGranted) {
+      final nowGranted = await _bluetooth.requestPermissions();
+      if (!nowGranted) {
+        setState(() {
+          _hasPermissions = false;
+          _statusMessage = 'Nearby Device / Location permissions are required for BLE.';
+        });
+        return;
+      }
+    }
+
+    setState(() {
+      _isActivating = true;
+      _statusMessage = 'Acquiring GPS location & starting BLE emergency broadcast...';
+    });
+
+    // 3. Acquire Real GPS Location (High accuracy, 3s timeout to avoid delaying emergency)
+    Position? position;
+    try {
+      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (serviceEnabled) {
+        final perm = await Geolocator.checkPermission();
+        if (perm == LocationPermission.always || perm == LocationPermission.whileInUse) {
+          position = await Geolocator.getCurrentPosition(
+            locationSettings: const LocationSettings(
+              accuracy: LocationAccuracy.high,
+              timeLimit: Duration(seconds: 3),
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint('GPS acquisition: $e');
+    }
+
+    // 4. Generate Unique Emergency ID
+    final id = 'BHAI-${DateTime.now().millisecondsSinceEpoch % 1000000}-${_bluetooth.myDeviceId}';
+
+    // 5. Start Real Continuous BLE Emergency Advertisement & Sync
+    await _bluetooth.startEmergencyBroadcast(
+      latitude: position?.latitude,
+      longitude: position?.longitude,
+      emergencyId: id,
+    );
+
+    // 6. Trigger backend emergency alert if online
+    String? backendAlertId;
+    if (position != null) {
+      try {
+        final alertRes = await ApiClient().post('/api/emergency/alert', {
+          'idempotency_key': id,
+          'latitude': position.latitude,
+          'longitude': position.longitude,
+          'accuracy': position.accuracy,
+          'recorded_at': DateTime.now().toUtc().toIso8601String(),
+          'network_status': 'ONLINE',
+          'device_status': {'source': 'mobile_sos'},
+        });
+        if (alertRes is Map && alertRes['id'] != null) {
+          backendAlertId = alertRes['id'].toString();
+        }
+      } catch (e) {
+        debugPrint('Backend alert trigger error: $e');
+      }
+    }
+
+    // 7. Automatically start 5-second live location stream
+    String? liveSessionId;
+    try {
+      liveSessionId = await _emergencyService.startLiveLocationSharing();
+    } catch (e) {
+      debugPrint('Live location auto-start error: $e');
+    }
+
+    if (!mounted) return;
+
+    setState(() {
+      _isActivating = false;
+      _isBroadcastingSos = true;
+      _isLiveLocationSharing = liveSessionId != null;
+      _liveSessionId = liveSessionId;
+      _currentPosition = position;
+      _emergencyId = backendAlertId ?? id;
+      _statusMessage = '🚨 EMERGENCY BROADCAST ACTIVE • BLE + 5s Live Location Stream';
+    });
+  }
+
+  Future<void> _stopEmergencyBroadcast() async {
+    await _bluetooth.stopEmergencyBroadcast();
+
+    // Stop live location stream if active
+    if (_isLiveLocationSharing) {
+      await _emergencyService.stopLiveLocationSharing();
+    }
+
+    // Resolve specific emergency on backend without resetting other users
+    if (_emergencyId != null) {
+      try {
+        await ApiClient().post('/api/emergency/$_emergencyId/resolve', {'reason': 'RESOLVED_BY_USER'});
+      } catch (_) {}
+    }
+
+    if (!mounted) return;
+
+    setState(() {
+      _isBroadcastingSos = false;
+      _isActivating = false;
+      _isLiveLocationSharing = false;
+      _liveSessionId = null;
+      _acknowledgedHelperId = null;
+      _statusMessage = 'Standby • Ready to broadcast or detect nearby emergency alerts';
+    });
+  }
+
+  Future<void> _toggleLiveLocationStream() async {
+    if (_isLiveLocationSharing) {
+      await _emergencyService.stopLiveLocationSharing();
+      if (!mounted) return;
+      setState(() {
+        _isLiveLocationSharing = false;
+        _liveSessionId = null;
+        if (!_isBroadcastingSos) {
+          _statusMessage = 'Standby • Live location sharing stopped';
+        }
+      });
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          backgroundColor: AppTheme.accentCrimson,
-          content: Text('SOS Triggered! Location sharing active. Contacts alerted.', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+          content: Text('Live location stream stopped'),
+          backgroundColor: Colors.blueGrey,
         ),
       );
     } else {
+      setState(() {
+        _statusMessage = 'Starting 5s Live Location Stream...';
+      });
+      try {
+        final sid = await _emergencyService.startLiveLocationSharing();
+        if (!mounted) return;
+        setState(() {
+          _isLiveLocationSharing = true;
+          _liveSessionId = sid;
+          _statusMessage = '🟢 Live location streaming active (updates every 5s)';
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('🟢 Live location sharing started (transmitting every 5s)'),
+            backgroundColor: Colors.teal,
+          ),
+        );
+      } catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Could not start live stream: $e'),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
+    }
+  }
+
+  void _openNavigation([double? lat, double? lon]) {
+    final targetLat = lat ?? _currentPosition?.latitude ?? 28.6273;
+    final targetLon = lon ?? _currentPosition?.longitude ?? 77.3725;
+    _emergencyService.openNavigation(targetLat, targetLon);
+  }
+
+  void _shareLocationLink([double? lat, double? lon]) {
+    final targetLat = lat ?? _currentPosition?.latitude ?? 28.6273;
+    final targetLon = lon ?? _currentPosition?.longitude ?? 77.3725;
+    final url = _emergencyService.getNavigationUrl(targetLat, targetLon);
+    final text = '🚨 Bhai App Emergency / Live Location Coordinates:\n$url\nLatitude: $targetLat, Longitude: $targetLon';
+    Clipboard.setData(ClipboardData(text: text));
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('📍 Location & Navigation Link copied to clipboard!'),
+        backgroundColor: Colors.green,
+      ),
+    );
+  }
+
+  Future<void> _findNearbyBhai() async {
+    setState(() {
+      _isLoadingNearby = true;
+    });
+    try {
+      final users = await _emergencyService.getNearbyUsers(
+        latitude: _currentPosition?.latitude,
+        longitude: _currentPosition?.longitude,
+      );
+      if (!mounted) return;
+      setState(() {
+        _isLoadingNearby = false;
+      });
+      _showNearbyUsersSheet(users);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isLoadingNearby = false;
+      });
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          backgroundColor: Colors.green,
-          content: Text('SOS Resolved. Telemetry tracking stopped.'),
+        SnackBar(
+          content: Text('Error finding nearby users: $e'),
+          backgroundColor: Colors.redAccent,
         ),
       );
     }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('BHAI SHIELD'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.person_outline),
-            onPressed: () => context.push('/settings'), // Navigates to settings/profile
-          )
-        ],
+  void _showNearbyUsersSheet(List<Map<String, dynamic>> users) {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: const Color(0xFF0F172A),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
-      body: Container(
-        decoration: BoxDecoration(
-          gradient: isDark ? AppTheme.darkGradient : AppTheme.lightGradient,
-        ),
-        child: Column(
-          children: [
-            Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.all(20.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Status Header Card
-                    _buildStatusHeaderCard(),
-                    const SizedBox(height: 20),
-
-                    // Quick Telemetry Info Row
-                    Row(
-                      children: [
-                        Expanded(child: _buildTelemetryCard(Icons.battery_charging_full, '$_batteryLevel%', 'Device Battery')),
-                        const SizedBox(width: 12),
-                        Expanded(child: _buildTelemetryCard(Icons.wifi, _networkStatus, 'Network State')),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                    Row(
-                      children: [
-                        Expanded(child: _buildTelemetryCard(Icons.cloud_queue, _weather, 'Weather')),
-                        const SizedBox(width: 12),
-                        Expanded(child: _buildTelemetryCard(Icons.location_on_outlined, 'Sector 62', 'Trusted Zone')),
-                      ],
-                    ),
-                    const SizedBox(height: 35),
-
-                    // Center Big SOS Button
-                    Center(child: _buildEmergencySosButton()),
-                    const SizedBox(height: 40),
-
-                    // Volunteer Mode Toggle panel
-                    _buildVolunteerTogglePanel(),
-                    const SizedBox(height: 20),
-
-                    // Emergency Services Buttons
-                    _buildEmergencyQuickActions(),
-                  ],
-                ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.radar, color: Colors.cyanAccent, size: 24),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Nearby Bhai Users (${users.length})',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close, color: Colors.white70),
+                    onPressed: () => Navigator.pop(ctx),
+                  ),
+                ],
               ),
-            ),
-            _buildBottomNavigationBar(),
-          ],
+              const SizedBox(height: 12),
+              if (users.isEmpty) ...[
+                Container(
+                  padding: const EdgeInsets.all(20),
+                  alignment: Alignment.center,
+                  child: const Column(
+                    children: [
+                      Icon(Icons.person_search, color: Colors.grey, size: 48),
+                      SizedBox(height: 8),
+                      Text(
+                        'No active Bhai users found within 2.0 km radius.',
+                        style: TextStyle(color: Colors.grey, fontSize: 13),
+                      ),
+                    ],
+                  ),
+                ),
+              ] else ...[
+                Flexible(
+                  child: ListView.separated(
+                    shrinkWrap: true,
+                    itemCount: users.length,
+                    separatorBuilder: (_, __) => const Divider(color: Colors.white10),
+                    itemBuilder: (context, idx) {
+                      final u = users[idx];
+                      final distance = (u['distance_meters'] as num?)?.round() ?? 0;
+                      final uLat = (u['latitude'] as num?)?.toDouble() ?? 0.0;
+                      final uLon = (u['longitude'] as num?)?.toDouble() ?? 0.0;
+                      final id = u['user_id']?.toString().substring(0, 8) ?? 'Unknown';
+                      return ListTile(
+                        leading: CircleAvatar(
+                          backgroundColor: Colors.cyanAccent.withOpacity(0.15),
+                          child: const Icon(Icons.person_pin_circle, color: Colors.cyanAccent),
+                        ),
+                        title: Text(
+                          'Bhai User $id',
+                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                        ),
+                        subtitle: Text(
+                          '${distance}m away • ${uLat.toStringAsFixed(4)}, ${uLon.toStringAsFixed(4)}',
+                          style: const TextStyle(color: Colors.white60, fontSize: 12),
+                        ),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              icon: const Icon(Icons.directions, color: Colors.greenAccent),
+                              tooltip: 'Navigate',
+                              onPressed: () {
+                                Navigator.pop(ctx);
+                                _openNavigation(uLat, uLon);
+                              },
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.share, color: Colors.cyanAccent),
+                              tooltip: 'Share',
+                              onPressed: () {
+                                _shareLocationLink(uLat, uLon);
+                              },
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ],
+          ),
         ),
       ),
     );
   }
 
-  Widget _buildStatusHeaderCard() {
-    return GlassmorphicContainer(
+  void _confirmStopBroadcast() {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF0F172A),
+        title: const Text('Stop Emergency Broadcast?', style: TextStyle(color: Colors.white)),
+        content: const Text(
+          'Are you safe? This will cease the continuous BLE SOS beacon to nearby devices.',
+          style: TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('CANCEL', style: TextStyle(color: Colors.grey)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.accentCrimson,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              _stopEmergencyBroadcast();
+            },
+            child: const Text('STOP SOS', style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFF020617), // Deep slate black
+      appBar: AppBar(
+        title: const Text(
+          'BHAI',
+          style: TextStyle(
+            fontWeight: FontWeight.w900,
+            letterSpacing: 3,
+            fontSize: 24,
+          ),
+        ),
+        centerTitle: true,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            tooltip: 'Check Status',
+            onPressed: () {
+              _checkHardwareStatus();
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Status refreshed'), duration: Duration(seconds: 1)),
+              );
+            },
+          ),
+        ],
+      ),
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              // Device ID Pill
+              _deviceInfoBadge(),
+              const SizedBox(height: 14),
+
+              // V2 Core Status Indicators: Bluetooth, Internet, Location
+              _v2StatusIndicatorsRow(),
+              const SizedBox(height: 16),
+
+              // Bluetooth Warning Banner if OFF
+              if (!_isBluetoothOn) ...[
+                _bluetoothOffBanner(),
+                const SizedBox(height: 16),
+              ] else if (!_hasPermissions) ...[
+                _permissionMissingBanner(),
+                const SizedBox(height: 16),
+              ],
+
+              // Big Header & Subtitle
+              const Text(
+                'EMERGENCY NEARBY ALERT',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 1.5,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                _isBroadcastingSos
+                    ? 'Transmitting real BLE Emergency SOS to nearby phones'
+                    : 'Tap the button below in an emergency to alert nearby Bhai users.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: _isBroadcastingSos ? const Color(0xFFFCA5A5) : const Color(0xFF94A3B8),
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              const SizedBox(height: 24),
+
+              // Large Central SOS Button
+              _centralEmergencyButton(),
+              const SizedBox(height: 24),
+
+              // Live Status Card
+              _statusCard(),
+              const SizedBox(height: 16),
+
+              // If live location stream active, show dedicated live stream card
+              if (_isLiveLocationSharing) ...[
+                _liveLocationActiveCard(),
+                const SizedBox(height: 16),
+              ],
+
+              // If broadcasting, show active broadcast details card with Stop button
+              if (_isBroadcastingSos) ...[
+                _activeBroadcastCard(),
+                const SizedBox(height: 16),
+              ],
+
+              // Quick Actions: Find Nearby Bhai, Share Live Location, Google Maps Route, Share Link
+              _actionButtonsGrid(),
+              const SizedBox(height: 20),
+
+              // Footnote: Offline BLE & Dual Transport clarification
+              const Text(
+                'Dual-Rail Safety: Direct peer-to-peer BLE (2.4GHz) + Internet sync.\nWorks 100% offline between nearby phones without internet or servers.',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 11, color: Colors.grey, height: 1.4),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _deviceInfoBadge() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0F172A),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.white12),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 8,
+            height: 8,
+            decoration: BoxDecoration(
+              color: _isBluetoothOn ? Colors.greenAccent : Colors.redAccent,
+              shape: BoxShape.circle,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            'Your ID: BHAI-${_bluetooth.myDeviceId}',
+            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white70),
+          ),
+          const SizedBox(width: 10),
+          Icon(
+            Icons.bluetooth,
+            size: 13,
+            color: _isBluetoothOn ? Colors.cyanAccent : Colors.redAccent,
+          ),
+          const SizedBox(width: 4),
+          Text(
+            _isBluetoothOn ? 'BLE Ready' : 'BT Disabled',
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.bold,
+              color: _isBluetoothOn ? Colors.cyanAccent : Colors.redAccent,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _v2StatusIndicatorsRow() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0F172A),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white12),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceAround,
+        children: [
+          _statusPill(
+            'Bluetooth',
+            _isBluetoothOn ? 'CONNECTED' : 'OFF',
+            _isBluetoothOn ? Colors.greenAccent : Colors.redAccent,
+            Icons.bluetooth,
+          ),
+          Container(width: 1, height: 28, color: Colors.white10),
+          _statusPill(
+            'Internet',
+            _isInternetOn ? 'CONNECTED' : 'OFF',
+            _isInternetOn ? Colors.greenAccent : Colors.amberAccent,
+            Icons.wifi,
+          ),
+          Container(width: 1, height: 28, color: Colors.white10),
+          _statusPill(
+            'Location',
+            _isLocationOn ? 'AVAILABLE' : 'UNAVAILABLE',
+            _isLocationOn ? Colors.greenAccent : Colors.redAccent,
+            Icons.location_on,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _statusPill(String title, String value, Color color, IconData icon) {
+    return Column(
+      children: [
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 13, color: color),
+            const SizedBox(width: 4),
+            Text(
+              title,
+              style: const TextStyle(fontSize: 11, color: Colors.grey, fontWeight: FontWeight.w600),
+            ),
+          ],
+        ),
+        const SizedBox(height: 2),
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: 11,
+            color: color,
+            fontWeight: FontWeight.bold,
+            letterSpacing: 0.5,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _bluetoothOffBanner() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0x28EF4444),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.redAccent, width: 1.5),
+      ),
+      child: Column(
+        children: [
+          const Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.bluetooth_disabled, color: Colors.redAccent, size: 22),
+              SizedBox(width: 8),
+              Text(
+                'Bluetooth is Turned OFF',
+                style: TextStyle(
+                  color: Colors.redAccent,
+                  fontWeight: FontWeight.w900,
+                  fontSize: 15,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'Nearby emergency alerts require Bluetooth. Please turn on Bluetooth.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Colors.white70, fontSize: 13),
+          ),
+          const SizedBox(height: 10),
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.redAccent,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+            ),
+            icon: const Icon(Icons.bluetooth, size: 18),
+            label: const Text('TURN ON BLUETOOTH', style: TextStyle(fontWeight: FontWeight.bold)),
+            onPressed: () async {
+              await _bluetooth.requestEnableBluetooth();
+              await Future.delayed(const Duration(seconds: 1));
+              _checkHardwareStatus();
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _permissionMissingBanner() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0x28F59E0B),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.amberAccent, width: 1.5),
+      ),
+      child: Column(
+        children: [
+          const Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.security, color: Colors.amberAccent, size: 22),
+              SizedBox(width: 8),
+              Text(
+                'Permissions Required',
+                style: TextStyle(
+                  color: Colors.amberAccent,
+                  fontWeight: FontWeight.w900,
+                  fontSize: 15,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'Nearby Bluetooth and Location permissions are required to scan & advertise.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Colors.white70, fontSize: 13),
+          ),
+          const SizedBox(height: 10),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.amber,
+              foregroundColor: Colors.black,
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+            ),
+            onPressed: () async {
+              await _bluetooth.requestPermissions();
+              _checkHardwareStatus();
+            },
+            child: const Text('GRANT PERMISSIONS', style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _centralEmergencyButton() {
+    return Center(
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          // High-intensity animated pulsing waves during active SOS
+          if (_isBroadcastingSos) ...[
+            ScaleTransition(
+              scale: _scaleAnimation,
+              child: Container(
+                width: 250,
+                height: 250,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(color: AppTheme.accentCrimson.withOpacity(0.6), width: 3),
+                  boxShadow: [
+                    BoxShadow(
+                      color: AppTheme.accentCrimson.withOpacity(0.4),
+                      blurRadius: 40,
+                      spreadRadius: 10,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+
+          // Main Interactive SOS Button
+          GestureDetector(
+            onTap: _onBhaiHelpPressed,
+            child: Container(
+              height: 220,
+              width: 220,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: _isBroadcastingSos
+                    ? const LinearGradient(
+                        colors: [Color(0xFFDC2626), Color(0xFF7F1D1D)],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      )
+                    : AppTheme.sosGradient,
+                border: Border.all(color: Colors.white, width: 4),
+                boxShadow: [
+                  BoxShadow(
+                    color: AppTheme.accentCrimson.withOpacity(_isBroadcastingSos ? 0.75 : 0.45),
+                    blurRadius: 36,
+                    spreadRadius: 6,
+                  ),
+                ],
+              ),
+              child: Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (_isActivating)
+                        const SizedBox(
+                          width: 48,
+                          height: 48,
+                          child: CircularProgressIndicator(
+                            color: Colors.white,
+                            strokeWidth: 3.5,
+                          ),
+                        )
+                      else if (_isBroadcastingSos)
+                        const Icon(Icons.podcasts, color: Colors.white, size: 55)
+                      else
+                        const Icon(Icons.warning_amber_rounded, color: Colors.white, size: 55),
+                      const SizedBox(height: 10),
+                      Text(
+                        _isBroadcastingSos
+                            ? '🚨 BROADCASTING\nSOS'
+                            : (_isActivating ? 'ACTIVATING...' : '🚨 BHAI HELP'),
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 21,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 1.2,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        _isBroadcastingSos
+                            ? 'TRANSMITTING VIA BLE'
+                            : (_isActivating ? 'ACQUIRING GPS' : 'TAP IN AN EMERGENCY'),
+                        style: const TextStyle(
+                          color: Colors.white70,
+                          fontSize: 11,
+                          letterSpacing: 1,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _statusCard() {
+    final Color borderColor = _isBroadcastingSos
+        ? AppTheme.accentCrimson
+        : (!_isBluetoothOn ? Colors.redAccent : Colors.white12);
+    final IconData icon = _isBroadcastingSos
+        ? Icons.podcasts
+        : (!_isBluetoothOn ? Icons.bluetooth_disabled : Icons.shield_outlined);
+    final Color iconColor = _isBroadcastingSos
+        ? AppTheme.accentCrimson
+        : (!_isBluetoothOn ? Colors.redAccent : Colors.greenAccent);
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0F172A),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: borderColor, width: 1.5),
+      ),
       child: Row(
         children: [
           CircleAvatar(
-            backgroundColor: _isSosTriggered ? AppTheme.accentCrimson.withOpacity(0.2) : Colors.green.withOpacity(0.2),
-            radius: 24,
-            child: Icon(
-              _isSosTriggered ? Icons.warning_amber_rounded : Icons.shield_rounded,
-              color: _isSosTriggered ? AppTheme.accentCrimson : Colors.green,
-              size: 28,
-            ),
+            backgroundColor: iconColor.withOpacity(0.15),
+            child: Icon(icon, color: iconColor),
           ),
-          const SizedBox(width: 16),
+          const SizedBox(width: 14),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  _isSosTriggered ? 'SOS SYSTEM ACTIVE' : 'YOUR SHIELD IS ACTIVE',
+                  _statusMessage,
                   style: TextStyle(
                     fontWeight: FontWeight.bold,
-                    color: _isSosTriggered ? AppTheme.accentCrimson : Colors.green,
-                    letterSpacing: 0.8,
+                    fontSize: 13,
+                    color: iconColor,
                   ),
                 ),
-                Text(
-                  _currentAddress,
-                  style: const TextStyle(fontSize: 12, overflow: TextOverflow.ellipsis),
-                  maxLines: 1,
-                ),
+                if (_acknowledgedHelperId != null) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    'Helper BHAI-$_acknowledgedHelperId has responded to your distress signal!',
+                    style: const TextStyle(fontSize: 12, color: Colors.greenAccent, fontWeight: FontWeight.bold),
+                  ),
+                ],
               ],
             ),
-          )
-        ],
-      ),
-    );
-  }
-
-  Widget _buildTelemetryCard(IconData icon, String val, String subtitle) {
-    return GlassmorphicContainer(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(icon, color: AppTheme.accentCyan, size: 20),
-          const SizedBox(height: 8),
-          Text(val, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
-          Text(subtitle, style: const TextStyle(fontSize: 11, color: Colors.grey)),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildEmergencySosButton() {
-    return GestureDetector(
-      onLongPress: _triggerSos,
-      onDoubleTap: _triggerSos,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 300),
-        height: 180,
-        width: 180,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          boxShadow: [
-            BoxShadow(
-              color: (_isSosTriggered ? AppTheme.accentCrimson : AppTheme.accentCyan).withOpacity(0.35),
-              blurRadius: 25,
-              spreadRadius: 5,
-            )
-          ],
-          gradient: _isSosTriggered ? AppTheme.sosGradient : const LinearGradient(
-            colors: [Color(0xFF0284C7), Color(0xFF0F172A)],
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
           ),
-          border: Border.all(
-            color: _isSosTriggered ? Colors.white : AppTheme.accentCyan,
-            width: 3,
-          )
-        ),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              _isSosTriggered ? Icons.warning : Icons.power_settings_new_rounded,
-              color: Colors.white,
-              size: 50,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              _isSosTriggered ? 'ACTIVE' : 'SOS',
-              style: const TextStyle(fontSize: 24, color: Colors.white, fontWeight: FontWeight.w900, letterSpacing: 1),
-            ),
-            const Text(
-              'HOLD OR TAP TWICE',
-              style: TextStyle(fontSize: 9, color: Colors.white70, letterSpacing: 0.5),
-            )
-          ],
-        ),
+        ],
       ),
     );
   }
 
-  Widget _buildVolunteerTogglePanel() {
-    return GlassmorphicContainer(
-      child: SwitchListTile(
-        title: const Text('Volunteer Protection Mode', style: TextStyle(fontWeight: FontWeight.bold)),
-        subtitle: const Text('Allow nearby emergencies to contact you for help', style: TextStyle(fontSize: 12)),
-        activeColor: AppTheme.accentCyan,
-        value: _isVolunteerMode,
-        onChanged: _toggleVolunteerMode,
+  Widget _activeBroadcastCard() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: const Color(0x1CDC2626),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppTheme.accentCrimson, width: 1.5),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Row(
+            children: [
+              Icon(Icons.wifi_tethering, color: AppTheme.accentCrimson),
+              SizedBox(width: 10),
+              Text(
+                'LIVE EMERGENCY BROADCAST',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w900,
+                  fontSize: 15,
+                  letterSpacing: 0.5,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          _detailRow('Emergency ID', _emergencyId ?? 'BHAI-${_bluetooth.myDeviceId}', Colors.cyanAccent),
+          const SizedBox(height: 6),
+          _detailRow(
+            'GPS Coordinates',
+            _currentPosition != null
+                ? '${_currentPosition!.latitude.toStringAsFixed(5)}, ${_currentPosition!.longitude.toStringAsFixed(5)}'
+                : 'Not acquired (Indoor / BLE Proximity active)',
+            _currentPosition != null ? Colors.greenAccent : Colors.grey,
+          ),
+          const SizedBox(height: 6),
+          _detailRow('BLE Airwaves', 'Transmitting 2.4GHz SOS Beacon', Colors.amberAccent),
+          const SizedBox(height: 16),
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF334155),
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+                side: const BorderSide(color: Colors.white24),
+              ),
+            ),
+            icon: const Icon(Icons.stop_circle_outlined, color: Colors.redAccent),
+            label: const Text('STOP EMERGENCY BROADCAST', style: TextStyle(fontWeight: FontWeight.bold)),
+            onPressed: _confirmStopBroadcast,
+          ),
+        ],
       ),
     );
   }
 
-  Widget _buildEmergencyQuickActions() {
+  Widget _detailRow(String label, String value, Color valueColor) {
     return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        _buildQuickCircleButton(Icons.local_police_outlined, 'Police', () => context.push('/safe-route')),
-        _buildQuickCircleButton(Icons.local_hospital_outlined, 'Hospital', () => context.push('/safe-route')),
-        _buildQuickCircleButton(Icons.call, 'Helplines', () => context.push('/helpline')),
-        _buildQuickCircleButton(Icons.phone_in_talk, 'Fake Call', () => context.push('/fake-call')),
-        _buildQuickCircleButton(Icons.directions_run, 'Travel Mode', () => context.push('/travel-mode')),
+        Text(
+          label,
+          style: const TextStyle(fontSize: 12, color: Colors.grey, fontWeight: FontWeight.w600),
+        ),
+        Text(
+          value,
+          style: TextStyle(fontSize: 12, color: valueColor, fontWeight: FontWeight.bold),
+        ),
       ],
     );
   }
 
-  Widget _buildQuickCircleButton(IconData icon, String label, VoidCallback onTap) {
-    return GestureDetector(
-      onTap: onTap,
+  Widget _liveLocationActiveCard() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0x1810B981),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.greenAccent, width: 1.5),
+      ),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Container(
-            height: 50,
-            width: 50,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: AppTheme.secondaryDark.withOpacity(0.3),
-              border: Border.all(color: AppTheme.accentCyan.withOpacity(0.3), width: 1.5),
-            ),
-            child: Icon(icon, color: AppTheme.accentCyan, size: 24),
+          Row(
+            children: [
+              Container(
+                width: 10,
+                height: 10,
+                decoration: const BoxDecoration(
+                  color: Colors.greenAccent,
+                  shape: BoxShape.circle,
+                ),
+              ),
+              const SizedBox(width: 8),
+              const Text(
+                'LIVE LOCATION STREAM ACTIVE (5s)',
+                style: TextStyle(
+                  color: Colors.greenAccent,
+                  fontWeight: FontWeight.w900,
+                  fontSize: 13,
+                  letterSpacing: 0.5,
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 6),
-          Text(label, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500)),
+          const SizedBox(height: 10),
+          _detailRow('Session ID', _liveSessionId?.substring(0, 8) ?? 'Active', Colors.cyanAccent),
+          const SizedBox(height: 4),
+          _detailRow('Frequency', 'Every 5 Seconds', Colors.greenAccent),
+          const SizedBox(height: 4),
+          _detailRow(
+            'Coordinates',
+            _currentPosition != null
+                ? '${_currentPosition!.latitude.toStringAsFixed(4)}, ${_currentPosition!.longitude.toStringAsFixed(4)}'
+                : 'Streaming GPS',
+            Colors.white,
+          ),
+          const SizedBox(height: 12),
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF1E293B),
+              foregroundColor: Colors.redAccent,
+              padding: const EdgeInsets.symmetric(vertical: 10),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+                side: const BorderSide(color: Colors.redAccent),
+              ),
+            ),
+            icon: const Icon(Icons.stop_circle, size: 18),
+            label: const Text('STOP LIVE STREAM', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+            onPressed: _toggleLiveLocationStream,
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildBottomNavigationBar() {
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 10),
-      decoration: BoxDecoration(
-        color: Theme.of(context).cardColor,
-        border: Border(top: BorderSide(color: Colors.grey.withOpacity(0.1), width: 1)),
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceAround,
-        children: [
-          IconButton(
-            icon: const Icon(Icons.home, color: AppTheme.accentCyan, size: 28),
-            onPressed: () {},
+  Widget _actionButtonsGrid() {
+    return Column(
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: _actionTile(
+                icon: Icons.radar,
+                iconColor: Colors.cyanAccent,
+                label: 'Find Nearby\nBhai Users',
+                isLoading: _isLoadingNearby,
+                onTap: _findNearbyBhai,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _actionTile(
+                icon: _isLiveLocationSharing ? Icons.stream : Icons.share_location,
+                iconColor: _isLiveLocationSharing ? Colors.greenAccent : Colors.amberAccent,
+                label: _isLiveLocationSharing ? 'Stop Live\nStream' : 'Share Live\nLocation (5s)',
+                isActive: _isLiveLocationSharing,
+                onTap: _toggleLiveLocationStream,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: _actionTile(
+                icon: Icons.navigation_outlined,
+                iconColor: Colors.lightGreenAccent,
+                label: 'Open Google\nMaps Route',
+                onTap: () => _openNavigation(),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _actionTile(
+                icon: Icons.copy_all_outlined,
+                iconColor: Colors.orangeAccent,
+                label: 'Copy Live\nLocation Link',
+                onTap: () => _shareLocationLink(),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _actionTile({
+    required IconData icon,
+    required Color iconColor,
+    required String label,
+    required VoidCallback onTap,
+    bool isLoading = false,
+    bool isActive = false,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+        decoration: BoxDecoration(
+          color: isActive ? iconColor.withOpacity(0.12) : const Color(0xFF0F172A),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: isActive ? iconColor : Colors.white12,
+            width: isActive ? 1.5 : 1,
           ),
-          IconButton(
-            icon: const Icon(Icons.map_outlined, color: Colors.grey, size: 28),
-            onPressed: () => context.push('/safe-route'),
-          ),
-          IconButton(
-            icon: const Icon(Icons.contact_phone_outlined, color: Colors.grey, size: 28),
-            onPressed: () => context.push('/helpline'),
-          ),
-          IconButton(
-            icon: const Icon(Icons.settings_outlined, color: Colors.grey, size: 28),
-            onPressed: () => context.push('/settings'),
-          ),
-        ],
+        ),
+        child: Column(
+          children: [
+            if (isLoading)
+              const SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(strokeWidth: 2.5, color: Colors.cyanAccent),
+              )
+            else
+              Icon(icon, color: iconColor, size: 26),
+            const SizedBox(height: 8),
+            Text(
+              label,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: isActive ? iconColor : Colors.white,
+                fontWeight: FontWeight.bold,
+                fontSize: 12,
+                height: 1.2,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

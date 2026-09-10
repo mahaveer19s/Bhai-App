@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 class VoiceSosService {
@@ -27,12 +28,12 @@ class VoiceSosService {
     
     final hasPermissions = await requestPermissions();
     if (!hasPermissions) {
-      print('Microphone or Speech Recognition permissions denied for Voice SOS.');
+      debugPrint('Microphone or Speech Recognition permissions denied for Voice SOS.');
       return;
     }
 
-    _isListening = true;
-    _runRecognitionLoop(onWakeWordDetected);
+  _isListening = true;
+  _runRecognitionLoop(onWakeWordDetected);
   }
 
   void _runRecognitionLoop(Function() onWakeWordDetected) {
@@ -44,7 +45,7 @@ class VoiceSosService {
       We implement a periodic restart loop because on-device voice services automatically 
       timeout or stop listening after periods of silence.
     */
-    print('Voice SOS service listening offline for: $_wakeWords');
+    debugPrint('Voice SOS service listening offline for: $_wakeWords');
     
     // In a full mobile deployment, we bind the SpeechToText instance and call listen()
     // here, continuously checking if recognizedWords contains any elements from _wakeWords.
@@ -53,7 +54,7 @@ class VoiceSosService {
   /// Stops voice service detection.
   void stopListening() {
     _isListening = false;
-    print('Voice SOS service stopped.');
+    debugPrint('Voice SOS service stopped.');
   }
 
   /// Process text inputs (e.g. from background audio channels) to check matches.

@@ -1,21 +1,30 @@
-FROM alpine:3.18
+FROM python:3.12-slim
 
-ARG PB_VERSION=0.22.14
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PORT=8000
 
-RUN apk add --no-cache \
-    unzip \
-    ca-certificates \
-    curl
+WORKDIR /app
 
-# Download and unzip PocketBase
-ADD https://github.com/pocketbase/pocketbase/releases/download/v${PB_VERSION}/pocketbase_${PB_VERSION}_linux_amd64.zip /tmp/pb.zip
-RUN unzip /tmp/pb.zip -d /pb/ && rm /tmp/pb.zip
+# Install system utilities
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
 
-# Create volume directories
-RUN mkdir -p /pb/pb_data /pb/pb_public /pb/pb_migrations
+# Install backend dependencies
+COPY backend/requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Expose server port
-EXPOSE 8080
+# Copy backend application source and static web assets
+COPY backend/app ./app
 
-# Start PocketBase and serve
-CMD ["/pb/pocketbase", "serve", "--http=0.0.0.0:8080"]
+# Copy APK binary if present
+COPY bhai_app.apk* ./
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:${PORT:-8000}/health || exit 1
+
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]

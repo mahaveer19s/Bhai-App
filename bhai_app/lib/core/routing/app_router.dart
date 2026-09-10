@@ -1,40 +1,25 @@
 import 'package:go_router/go_router.dart';
-import '../../features/onboarding/presentation/onboarding_screens.dart';
-import '../../features/auth/presentation/login_screen.dart';
 import '../../features/home/presentation/home_screen.dart';
-import '../../features/map/presentation/safe_route_screen.dart';
-import '../../features/fake_call/presentation/fake_call_screen.dart';
-import '../../features/travel/presentation/travel_mode_screen.dart';
 import '../../features/helpline/presentation/helpline_screen.dart';
 import '../../features/settings/presentation/settings_screen.dart';
-import '../../features/volunteer/presentation/volunteer_dashboard_screen.dart';
+import '../../features/emergency/presentation/emergency_history_screen.dart';
 
+/// V1 Router: Direct access to emergency finder without login or signup hurdles.
 final GoRouter appRouter = GoRouter(
-  initialLocation: '/onboarding',
+  initialLocation: '/home',
   routes: [
-    GoRoute(
-      path: '/onboarding',
-      builder: (context, state) => const OnboardingScreens(),
-    ),
-    GoRoute(
-      path: '/login',
-      builder: (context, state) => const LoginScreen(),
-    ),
     GoRoute(
       path: '/home',
       builder: (context, state) => const HomeScreen(),
     ),
+    // Redirects for legacy routes to ensure zero signup / login blocks
     GoRoute(
-      path: '/safe-route',
-      builder: (context, state) => const SafeRouteScreen(),
+      path: '/login',
+      redirect: (context, state) => '/home',
     ),
     GoRoute(
-      path: '/fake-call',
-      builder: (context, state) => const FakeCallScreen(),
-    ),
-    GoRoute(
-      path: '/travel-mode',
-      builder: (context, state) => const TravelModeScreen(),
+      path: '/onboarding',
+      redirect: (context, state) => '/home',
     ),
     GoRoute(
       path: '/helpline',
@@ -45,8 +30,8 @@ final GoRouter appRouter = GoRouter(
       builder: (context, state) => const SettingsScreen(),
     ),
     GoRoute(
-      path: '/volunteer',
-      builder: (context, state) => const VolunteerDashboardScreen(),
+      path: '/emergency-history',
+      builder: (context, state) => const EmergencyHistoryScreen(),
     ),
   ],
 );

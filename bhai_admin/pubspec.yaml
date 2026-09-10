@@ -17,12 +17,8 @@ dependencies:
   riverpod_annotation: ^2.3.3
   go_router: ^12.1.3
 
-  # Network & PocketBase API client
-  pocketbase: ^0.17.2
+  # Network API client
   http: ^1.1.2
-
-  # Visualization & Charts
-  fl_chart: ^0.66.0
 
 dev_dependencies:
   flutter_test:

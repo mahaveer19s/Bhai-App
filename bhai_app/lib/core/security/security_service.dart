@@ -6,7 +6,6 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 class SecurityService {
   final FlutterSecureStorage _secureStorage = const FlutterSecureStorage();
   enc.Key? _encryptionKey;
-  final enc.IV _fixedIV = enc.IV.fromLength(16); // 128-bit Initialization Vector
 
   // Singleton instance setup
   static final SecurityService _instance = SecurityService._internal();
@@ -29,16 +28,18 @@ class SecurityService {
     }
   }
 
-  /// Encrypts a string using AES-256 CBC mode.
+  /// Encrypts a string using AES-256-GCM with a fresh IV for every payload.
+  /// The IV is stored alongside the ciphertext; it is not a secret.
   String encrypt(String plainText) {
     if (_encryptionKey == null) {
       throw StateError('SecurityService is not initialized. Call init() first.');
     }
     if (plainText.isEmpty) return '';
 
-    final encrypter = enc.Encrypter(enc.AES(_encryptionKey!, mode: enc.AESMode.cbc));
-    final encrypted = encrypter.encrypt(plainText, iv: _fixedIV);
-    return encrypted.base64;
+    final iv = enc.IV.fromSecureRandom(12);
+    final encrypter = enc.Encrypter(enc.AES(_encryptionKey!, mode: enc.AESMode.gcm));
+    final encrypted = encrypter.encrypt(plainText, iv: iv);
+    return '${iv.base64}:${encrypted.base64}';
   }
 
   /// Decrypts a base64 encoded cipher text using AES-256 CBC mode.
@@ -49,8 +50,12 @@ class SecurityService {
     if (cipherTextBase64.isEmpty) return '';
 
     try {
-      final encrypter = enc.Encrypter(enc.AES(_encryptionKey!, mode: enc.AESMode.cbc));
-      final decrypted = encrypter.decrypt64(cipherTextBase64, iv: _fixedIV);
+      final parts = cipherTextBase64.split(':');
+      if (parts.length != 2) {
+        throw const FormatException('Encrypted payload is malformed');
+      }
+      final encrypter = enc.Encrypter(enc.AES(_encryptionKey!, mode: enc.AESMode.gcm));
+      final decrypted = encrypter.decrypt64(parts[1], iv: enc.IV.fromBase64(parts[0]));
       return decrypted;
     } catch (e) {
       // Fallback or decrytion failure handles gracefully

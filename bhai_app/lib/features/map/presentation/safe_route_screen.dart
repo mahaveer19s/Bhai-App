@@ -72,7 +72,7 @@ class _SafeRouteScreenState extends State<SafeRouteScreen> {
         });
       }
     } catch (e) {
-      print('Failed to calculate path telemetry: $e');
+      debugPrint('Failed to calculate path telemetry: $e');
       setState(() {
         _routePoints = [_currentUserLocation, _destinationLocation];
       });

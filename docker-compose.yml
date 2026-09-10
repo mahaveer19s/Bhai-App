@@ -1,0 +1,51 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgis/postgis:16-3.4-alpine
+    container_name: bhai-postgis-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-bhai}
+      POSTGRES_USER: ${POSTGRES_USER:-bhai_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-bhai_secure_password_2026}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bhai_user} -d ${POSTGRES_DB:-bhai}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bhai-backend-api
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-bhai_user}:${POSTGRES_PASSWORD:-bhai_secure_password_2026}@db:5432/${POSTGRES_DB:-bhai}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@bhai.app}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-BhaiSecureAdmin2026!}
+      JWT_SECRET: ${JWT_SECRET:-bhai-mesh-production-jwt-secret-key-32-chars-minimum}
+      OTP_HMAC_SECRET: ${OTP_HMAC_SECRET:-bhai-otp-hmac-secret-key-32-chars-minimum}
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      EMERGENCY_RADIUS_METERS: ${EMERGENCY_RADIUS_METERS:-2000}
+      LIVE_LOCATION_INTERVAL_SECONDS: ${LIVE_LOCATION_INTERVAL_SECONDS:-5}
+      APK_VERSION: ${APK_VERSION:-1.2.0}
+      APK_FILE_PATH: ${APK_FILE_PATH:-/app/bhai_app.apk}
+      PORT: 8000
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./bhai_app.apk:/app/bhai_app.apk:ro
+
+volumes:
+  pgdata:
+    driver: local

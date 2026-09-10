@@ -22,13 +22,14 @@ dependencies:
   sqflite: ^2.3.0
   flutter_secure_storage: ^10.3.1
   path_provider: ^2.1.1
+  path: ^1.9.0
+  connectivity_plus: ^6.0.5
   
   # Security & Core Utils
   encrypt: ^5.0.3
   crypto: ^3.0.3
   
-  # Network & PocketBase API
-  pocketbase: ^0.24.0+1
+  # Network API
   http: ^1.1.2
   
   # Maps & Location Telemetry
@@ -39,7 +40,6 @@ dependencies:
   flutter_blue_plus: ^2.3.10
   geolocator: ^13.0.2
   permission_handler: ^11.0.1
-  contacts_service: ^0.6.3
   camera: ^0.10.5+8
   record: ^6.0.0
   flutter_local_notifications: ^19.5.0

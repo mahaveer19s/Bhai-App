@@ -1,8 +1,6 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:flutter_map/flutter_map.dart';
-import 'package:latlong2/latlong.dart';
-import 'package:http/http.dart' as http;
+
+import '../../../core/services/emergency_service.dart';
 import '../../../core/theme/app_theme.dart';
 
 class VolunteerDashboardScreen extends StatefulWidget {
@@ -13,203 +11,122 @@ class VolunteerDashboardScreen extends StatefulWidget {
 }
 
 class _VolunteerDashboardScreenState extends State<VolunteerDashboardScreen> {
-  final MapController _mapController = MapController();
-  final LatLng _volunteerLocation = const LatLng(28.6273, 77.3725); // Volunteer coordinates
-  final LatLng _victimLocation = const LatLng(28.6295, 77.3768); // Simulated victim location
+  final _emergency = EmergencyService();
+  bool _loading = true;
+  String? _error;
+  List<NearbyEmergency> _emergencies = const [];
+  final Set<String> _acknowledging = {};
 
-  bool _isRequestAccepted = false;
-  List<LatLng> _routeToVictim = [];
-  bool _isLoadingRoute = false;
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
 
-  Future<void> _acceptEmergency() async {
-    setState(() => _isLoadingRoute = true);
-
-    // OSRM walking path from volunteer to victim
-    final String url = 'https://router.project-osrm.org/route/v1/foot/'
-        '${_volunteerLocation.longitude},${_volunteerLocation.latitude};'
-        '${_victimLocation.longitude},${_victimLocation.latitude}'
-        '?overview=full&geometries=geojson';
-
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
     try {
-      final response = await http.get(Uri.parse(url));
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        final geometry = data['routes'][0]['geometry']['coordinates'] as List;
-        
-        setState(() {
-          _routeToVictim = geometry.map((coord) {
-            return LatLng(coord[1] as double, coord[0] as double);
-          }).toList();
-          _isRequestAccepted = true;
-        });
+      _emergencies = await _emergency.getNearbyEmergencies();
+    } catch (_) {
+      _error = 'Could not load nearby requests. Check your helper availability and connection.';
+    }
+    if (mounted) setState(() => _loading = false);
+  }
+
+  Future<void> _acknowledge(NearbyEmergency event) async {
+    setState(() => _acknowledging.add(event.id));
+    try {
+      await _emergency.acknowledge(event.id, helping: true);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('The protected user has been told that a nearby BHAI is helping.')),
+        );
       }
-    } catch (e) {
-      print('Failed to calculate navigation line to victim: $e');
-      setState(() {
-        _routeToVictim = [_volunteerLocation, _victimLocation];
-        _isRequestAccepted = true;
-      });
+      await _load();
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not acknowledge this emergency. Please call official services if safe.')),
+        );
+      }
     } finally {
-      setState(() => _isLoadingRoute = false);
+      if (mounted) setState(() => _acknowledging.remove(event.id));
     }
   }
 
   @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+  Widget build(BuildContext context) => Scaffold(
+        appBar: AppBar(
+          title: const Text('NEARBY BHAI ALERTS'),
+          actions: [IconButton(onPressed: _loading ? null : _load, icon: const Icon(Icons.refresh))],
+        ),
+        body: RefreshIndicator(
+          onRefresh: _load,
+          child: _loading
+              ? const Center(child: CircularProgressIndicator())
+              : _error != null
+                  ? ListView(children: [Padding(padding: const EdgeInsets.all(24), child: Text(_error!, textAlign: TextAlign.center))])
+                  : _emergencies.isEmpty
+                      ? ListView(
+                          children: const [
+                            SizedBox(height: 160),
+                            Icon(Icons.shield_outlined, size: 64, color: Colors.grey),
+                            SizedBox(height: 16),
+                            Text('No nearby active emergencies.', textAlign: TextAlign.center),
+                            SizedBox(height: 8),
+                            Padding(
+                              padding: EdgeInsets.symmetric(horizontal: 36),
+                              child: Text('BHAI never shows an exact location until you choose to help.', textAlign: TextAlign.center, style: TextStyle(color: Colors.grey)),
+                            ),
+                          ],
+                        )
+                      : ListView.separated(
+                          padding: const EdgeInsets.all(16),
+                          itemCount: _emergencies.length,
+                          separatorBuilder: (_, __) => const SizedBox(height: 12),
+                          itemBuilder: (_, index) => _card(_emergencies[index]),
+                        ),
+        ),
+      );
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('VOLUNTEER FEED'),
-      ),
-      body: Stack(
-        children: [
-          // OpenStreetMap Tile rendering
-          FlutterMap(
-            mapController: _mapController,
-            options: MapOptions(
-              initialCenter: _volunteerLocation,
-              initialZoom: 15.0,
-            ),
+  Widget _card(NearbyEmergency event) => Card(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              TileLayer(
-                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                userAgentPackageName: 'com.bhai.app',
-                tileBuilder: isDark ? (context, tileWidget, tile) {
-                  return ColorFiltered(
-                    colorFilter: const ColorFilter.matrix([
-                      -1.0, 0.0, 0.0, 0.0, 255.0,
-                      0.0, -1.0, 0.0, 0.0, 255.0,
-                      0.0, 0.0, -1.0, 0.0, 255.0,
-                      0.0, 0.0, 0.0, 1.0, 0.0,
-                    ]),
-                    child: tileWidget,
-                  );
-                } : null,
-              ),
-              if (_isRequestAccepted)
-                PolylineLayer(
-                  polylines: [
-                    Polyline(
-                      points: _routeToVictim,
-                      strokeWidth: 4.5,
-                      color: AppTheme.accentCrimson,
-                    ),
-                  ],
-                ),
-              MarkerLayer(
-                markers: [
-                  // Volunteer Marker
-                  Marker(
-                    point: _volunteerLocation,
-                    width: 40.0,
-                    height: 40.0,
-                    child: const Icon(Icons.shield, color: AppTheme.accentCyan, size: 30),
-                  ),
-                  // Victim Marker
-                  Marker(
-                    point: _victimLocation,
-                    width: 40.0,
-                    height: 40.0,
-                    child: const Icon(Icons.warning, color: AppTheme.accentCrimson, size: 35),
-                  ),
+              Row(
+                children: [
+                  const Icon(Icons.warning_amber_rounded, color: AppTheme.accentCrimson),
+                  const SizedBox(width: 8),
+                  const Expanded(child: Text('BHAI HELP ALERT', style: TextStyle(fontWeight: FontWeight.bold))),
+                  Text(_distance(event.distanceMeters), style: const TextStyle(color: Colors.grey)),
                 ],
+              ),
+              const SizedBox(height: 10),
+              Text('Requested ${_age(event.triggeredAt)}. Exact location is protected until you accept.'),
+              const SizedBox(height: 14),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  onPressed: _acknowledging.contains(event.id) ? null : () => _acknowledge(event),
+                  style: FilledButton.styleFrom(backgroundColor: AppTheme.accentCrimson),
+                  child: _acknowledging.contains(event.id)
+                      ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                      : const Text('I CAN HELP'),
+                ),
               ),
             ],
           ),
+        ),
+      );
 
-          // Sliding Info Card
-          Positioned(
-            bottom: 24,
-            left: 20,
-            right: 20,
-            child: GlassmorphicContainer(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      CircleAvatar(
-                        backgroundColor: AppTheme.accentCrimson.withOpacity(0.2),
-                        child: const Icon(Icons.warning_amber_rounded, color: AppTheme.accentCrimson),
-                      ),
-                      const SizedBox(width: 12),
-                      const Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Nearby Emergency Active',
-                              style: TextStyle(fontWeight: FontWeight.bold, color: AppTheme.accentCrimson),
-                            ),
-                            Text('Distance: ~450m | Walk: ~5 mins', style: TextStyle(fontSize: 12, color: Colors.grey)),
-                          ],
-                        ),
-                      )
-                    ],
-                  ),
-                  const Divider(color: Colors.white24, height: 16),
-                  if (!_isRequestAccepted) ...[
-                    const Text(
-                      'A nearby user has triggered an SOS alert. Are you available to assist?',
-                      style: TextStyle(fontSize: 13),
-                    ),
-                    const SizedBox(height: 16),
-                    ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppTheme.accentCrimson,
-                        foregroundColor: Colors.white,
-                        minimumSize: const Size.fromHeight(48),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                      ),
-                      onPressed: _acceptEmergency,
-                      child: _isLoadingRoute 
-                          ? const CircularProgressIndicator(color: Colors.white)
-                          : const Text('Accept & Navigate to Victim', style: TextStyle(fontWeight: FontWeight.bold)),
-                    )
-                  ] else ...[
-                    const Row(
-                      children: [
-                        Icon(Icons.check_circle_outline, color: Colors.green),
-                        SizedBox(width: 8),
-                        Text(
-                          'You have accepted this request.',
-                          style: TextStyle(fontWeight: FontWeight.bold, color: Colors.green),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    const Text(
-                      'Please navigate safely using the crimson route path. Victim has been notified that help is on the way.',
-                      style: TextStyle(fontSize: 12),
-                    ),
-                    const SizedBox(height: 12),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: ElevatedButton.icon(
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.green,
-                              foregroundColor: Colors.white,
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                            ),
-                            icon: const Icon(Icons.call),
-                            label: const Text('Call Emergency Services'),
-                            onPressed: () {
-                              // Direct call to local police line
-                            },
-                          ),
-                        ),
-                      ],
-                    )
-                  ]
-                ],
-              ),
-            ),
-          )
-        ],
-      ),
-    );
+  String _distance(int meters) => meters < 1000 ? '${meters}m away' : '${(meters / 1000).toStringAsFixed(1)}km away';
+  String _age(DateTime time) {
+    final minutes = DateTime.now().difference(time).inMinutes;
+    return minutes <= 0 ? 'just now' : '$minutes min ago';
   }
 }

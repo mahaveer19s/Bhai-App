@@ -55,7 +55,7 @@ class _HelplineScreenState extends State<HelplineScreen> {
   }
 
   void _callNumber(String number) {
-    print('Launching Dialer for: tel:$number');
+    debugPrint('Launching Dialer for: tel:$number');
     // In production: launchUrl(Uri.parse('tel:$number'));
   }
 

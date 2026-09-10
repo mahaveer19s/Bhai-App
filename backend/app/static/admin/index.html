@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BHAI Central Command — Emergency Operations Admin</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- Leaflet CSS for Interactive OpenStreetMap -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+    <link rel="stylesheet" href="/static/admin/admin.css">
+</head>
+<body>
+
+    <!-- Admin Login Modal -->
+    <div id="login-modal" class="modal-overlay">
+        <div class="modal-card">
+            <div class="modal-header">
+                <div class="shield-badge">🛡️</div>
+                <h2>Bhai Admin Access</h2>
+                <p>Enter administrator credentials to access the central emergency response radar.</p>
+                <div style="background: rgba(14, 165, 233, 0.12); border: 1px solid rgba(14, 165, 233, 0.35); border-radius: 8px; padding: 10px 12px; margin-top: 12px; font-size: 12px; color: #7dd3fc; line-height: 1.5; text-align: left;">
+                    🔑 <strong>Default Username:</strong> <code>admin</code> (or <code>admin@bhai.app</code>)<br>
+                    🔒 <strong>Default Password:</strong> <code>BhaiSecureAdmin2026!</code>
+                </div>
+            </div>
+            <form id="login-form">
+                <div class="input-group">
+                    <label for="admin-username">Admin Username</label>
+                    <input type="text" id="admin-username" required placeholder="admin" autocomplete="username">
+                </div>
+                <div class="input-group">
+                    <label for="admin-password">Password</label>
+                    <input type="password" id="admin-password" required placeholder="••••••••" autocomplete="current-password">
+                </div>
+                <div id="login-error" class="alert-error" style="display: none;"></div>
+                <button type="submit" class="btn-submit" id="btn-login-submit">Authenticate & Enter</button>
+            </form>
+            <div class="modal-footer">
+                <a href="/">← Return to Public Landing</a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Dashboard Container -->
+    <div id="admin-app" style="display: none;">
+        <!-- Top Navigation -->
+        <header class="admin-header">
+            <div class="header-left">
+                <div class="brand-badge">
+                    <span class="pulse-beacon"></span>
+                    <span class="brand-name">BHAI COMMAND CENTER</span>
+                </div>
+                <div class="connection-status" id="ws-status">
+                    <span class="status-dot"></span>
+                    <span id="ws-status-text">Connecting to Realtime Mesh...</span>
+                </div>
+            </div>
+            <div class="header-right">
+                <button class="btn-refresh" id="btn-manual-refresh" title="Force Refresh">🔄 Sync Now</button>
+                <div class="admin-user-tag">
+                    <span class="user-avatar">OP</span>
+                    <span class="user-role">ADMINISTRATOR</span>
+                </div>
+                <button class="btn-logout" id="btn-logout" title="Sign Out">Logout</button>
+            </div>
+        </header>
+
+        <!-- Metrics Overview Grid -->
+        <section class="metrics-grid">
+            <div class="metric-card red-glow">
+                <div class="metric-header">
+                    <span>ACTIVE EMERGENCIES</span>
+                    <span class="metric-icon">🚨</span>
+                </div>
+                <div class="metric-value" id="metric-active-emergencies">0</div>
+                <div class="metric-sub">Requires active dispatch response</div>
+            </div>
+
+            <div class="metric-card blue-glow">
+                <div class="metric-header">
+                    <span>LIVE LOCATION SESSIONS</span>
+                    <span class="metric-icon">📍</span>
+                </div>
+                <div class="metric-value" id="metric-live-locations">0</div>
+                <div class="metric-sub">5-second real-time GPS streams</div>
+            </div>
+
+            <div class="metric-card green-glow">
+                <div class="metric-header">
+                    <span>RESOLVED INCIDENTS</span>
+                    <span class="metric-icon">✅</span>
+                </div>
+                <div class="metric-value" id="metric-resolved">0</div>
+                <div class="metric-sub">Successfully assisted or closed</div>
+            </div>
+
+            <div class="metric-card purple-glow">
+                <div class="metric-header">
+                    <span>COMMUNITY RESPONDERS</span>
+                    <span class="metric-icon">👥</span>
+                </div>
+                <div class="metric-value" id="metric-responders">0</div>
+                <div class="metric-sub">Nearby helpers acknowledged</div>
+            </div>
+        </section>
+
+        <!-- Main Body: Map & Incident Feed -->
+        <main class="dashboard-body">
+            <!-- Left: Interactive Map -->
+            <section class="map-panel">
+                <div class="panel-header">
+                    <h3>🗺️ Live Emergency & Location Radar</h3>
+                    <div class="map-legend">
+                        <span class="legend-item"><span class="marker-dot red"></span> Emergency Alert</span>
+                        <span class="legend-item"><span class="marker-dot cyan"></span> Live Location (5s)</span>
+                    </div>
+                </div>
+                <div id="radar-map" class="map-viewport"></div>
+            </section>
+
+            <!-- Right: Incident Feed & Active Sessions -->
+            <aside class="feed-panel">
+                <div class="feed-tabs">
+                    <button class="tab-btn active" id="tab-emergencies">Emergencies (<span id="count-emergencies">0</span>)</button>
+                    <button class="tab-btn" id="tab-live-streams">Live Streams (<span id="count-live-streams">0</span>)</button>
+                </div>
+
+                <div class="feed-content" id="incident-feed-list">
+                    <!-- Dynamic Incident Cards Inserted Here -->
+                    <div class="empty-state">No incidents currently reporting. System is standby.</div>
+                </div>
+            </aside>
+        </main>
+    </div>
+
+    <!-- Incident Detail Modal -->
+    <div id="detail-modal" class="modal-overlay" style="display: none;">
+        <div class="modal-card detail-card">
+            <div class="modal-header">
+                <div class="detail-badge" id="modal-status-badge">ACTIVE</div>
+                <h2 id="modal-title">Emergency Incident Details</h2>
+                <p id="modal-id" class="code-id">ID: 00000000-0000-0000-0000-000000000000</p>
+            </div>
+            <div class="modal-body-content">
+                <div class="info-grid">
+                    <div class="info-block">
+                        <span class="info-label">Current Latitude</span>
+                        <span class="info-val" id="modal-lat">0.000000</span>
+                    </div>
+                    <div class="info-block">
+                        <span class="info-label">Current Longitude</span>
+                        <span class="info-val" id="modal-lon">0.000000</span>
+                    </div>
+                    <div class="info-block">
+                        <span class="info-label">GPS Accuracy</span>
+                        <span class="info-val" id="modal-accuracy">±10 m</span>
+                    </div>
+                    <div class="info-block">
+                        <span class="info-label">Last Updated</span>
+                        <span class="info-val" id="modal-updated">Just now</span>
+                    </div>
+                </div>
+
+                <div class="action-bar-modal">
+                    <button class="btn-action btn-navigate" id="modal-btn-navigate">🗺️ Open Turn-by-Turn Navigation</button>
+                    <button class="btn-action btn-share" id="modal-btn-share">📲 Share Location Context</button>
+                </div>
+
+                <div class="management-bar" id="modal-mgmt-bar">
+                    <button class="btn-mgmt btn-ack" id="modal-btn-ack">Acknowledge Alert</button>
+                    <button class="btn-mgmt btn-resolve" id="modal-btn-resolve">Resolve Incident</button>
+                    <button class="btn-mgmt btn-cancel" id="modal-btn-cancel">Cancel Incident</button>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-close" id="modal-btn-close">Close Inspector</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notification Container -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    <script src="/static/admin/admin.js"></script>
+</body>
+</html>

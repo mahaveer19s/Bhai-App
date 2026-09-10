@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 class PowerSosService {
@@ -34,7 +35,7 @@ class PowerSosService {
         _handleScreenToggle(onTrigger);
       },
       onError: (error) {
-        print('Screen event stream error: $error');
+        debugPrint('Screen event stream error: $error');
       }
     );
   }
