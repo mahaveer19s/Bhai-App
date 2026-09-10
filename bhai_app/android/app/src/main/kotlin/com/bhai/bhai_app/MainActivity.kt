@@ -24,14 +24,20 @@ import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import java.util.Locale
 
+import android.media.AudioManager
+import android.media.ToneGenerator
+import android.os.Handler
+import android.os.Looper
+
 /**
  * Real, production-grade Android BLE SOS & Nearby-Peer Transport.
  * Transmits compact binary packets fitting standard 31-byte legacy BLE advertising limits:
  * - Magic: "BHAI" (4 bytes)
- * - Type: 0x01 (Presence), 0x02 (Emergency Alert), 0x03 (Alert ACK)
+ * - Type: 0x01 (Presence), 0x02 (Emergency Alert), 0x03 (Alert ACK), 0x04 (Direct BLE Chat)
  * - Sender Ephemeral ID (4 bytes)
  * - Target Ephemeral ID (4 bytes)
- * - Sequence / Nonce (1 byte)
+ * - Payload / Coordinates / Text (8 bytes)
+ * - Flag & Sequence / Nonce (2 bytes)
  */
 class MainActivity : FlutterActivity() {
     private val methodChannelName = "com.bhai.app/ble_emergency"
@@ -44,6 +50,27 @@ class MainActivity : FlutterActivity() {
     private var currentAdvertiseCallback: AdvertiseCallback? = null
     private var isScanningActive = false
     private var currentMyDeviceId: String = ""
+
+    // Native High-Intensity Siren Generator
+    private var toneGenerator: ToneGenerator? = null
+    private var sirenHandler: Handler? = null
+    private var isSirenPlaying = false
+    private var sirenStep = 0
+
+    private val sirenRunnable = object : Runnable {
+        override fun run() {
+            if (!isSirenPlaying) return
+            try {
+                if (toneGenerator == null) {
+                    toneGenerator = ToneGenerator(AudioManager.STREAM_ALARM, 100)
+                }
+                val tone = if (sirenStep % 2 == 0) ToneGenerator.TONE_CDMA_EMERGENCY_RINGBACK else ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD
+                toneGenerator?.startTone(tone, 450)
+                sirenStep++
+            } catch (e: Exception) {}
+            sirenHandler?.postDelayed(this, 500)
+        }
+    }
 
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
@@ -68,9 +95,15 @@ class MainActivity : FlutterActivity() {
 
                 var latitude: Double? = null
                 var longitude: Double? = null
+                var chatText: String? = null
                 val hasLocation = rawBytes.size >= 22 && rawBytes[21].toInt() == 1
 
-                if (hasLocation && rawBytes.size >= 21) {
+                if (type == 4 && rawBytes.size >= 21) {
+                    // Type 4: Direct Chat / Safety Status message payload
+                    val textBytes = ByteArray(8)
+                    System.arraycopy(rawBytes, 13, textBytes, 0, 8)
+                    chatText = String(textBytes, Charsets.UTF_8).trimEnd('\u0000', ' ')
+                } else if (hasLocation && rawBytes.size >= 21) {
                     val latInt = (rawBytes[13].toInt() shl 24) or
                                  ((rawBytes[14].toInt() and 0xFF) shl 16) or
                                  ((rawBytes[15].toInt() and 0xFF) shl 8) or
@@ -93,6 +126,7 @@ class MainActivity : FlutterActivity() {
                             "latitude" to latitude,
                             "longitude" to longitude,
                             "hasLocation" to hasLocation,
+                            "chatText" to chatText,
                             "detectedAt" to System.currentTimeMillis()
                         )
                     )
@@ -201,6 +235,31 @@ class MainActivity : FlutterActivity() {
                     } catch (e2: Exception) {
                         result.error("failed_to_open_maps", e2.message, null)
                     }
+                }
+            "startEmergencySiren" -> {
+                try {
+                    if (!isSirenPlaying) {
+                        isSirenPlaying = true
+                        sirenStep = 0
+                        sirenHandler = Handler(Looper.getMainLooper())
+                        sirenHandler?.post(sirenRunnable)
+                    }
+                    result.success(true)
+                } catch (e: Exception) {
+                    result.error("siren_error", e.message, null)
+                }
+            }
+            "stopEmergencySiren" -> {
+                try {
+                    isSirenPlaying = false
+                    sirenHandler?.removeCallbacks(sirenRunnable)
+                    sirenHandler = null
+                    toneGenerator?.stopTone()
+                    toneGenerator?.release()
+                    toneGenerator = null
+                    result.success(true)
+                } catch (e: Exception) {
+                    result.error("siren_error", e.message, null)
                 }
             }
             else -> result.notImplemented()

@@ -33,8 +33,29 @@ class LiveLocationSessionStatus(str, enum.Enum):
 
 class ResponseType(str, enum.Enum):
     ACKNOWLEDGED = "ACKNOWLEDGED"
+    COMING = "COMING"
     HELPING = "HELPING"
+    REACHED = "REACHED"
     CANNOT_HELP = "CANNOT_HELP"
+
+
+class ConversationStatus(str, enum.Enum):
+    ACTIVE = "ACTIVE"
+    CLOSED = "CLOSED"
+    READ_ONLY = "READ_ONLY"
+
+
+class MessageTransport(str, enum.Enum):
+    INTERNET = "INTERNET"
+    BLUETOOTH = "BLUETOOTH"
+
+
+class MessageDeliveryStatus(str, enum.Enum):
+    SENDING = "SENDING"
+    SENT = "SENT"
+    DELIVERED = "DELIVERED"
+    READ = "READ"
+    FAILED = "FAILED"
 
 
 class DeliveryStatus(str, enum.Enum):
@@ -197,6 +218,10 @@ class EmergencyResponse(Base):
     helper_user_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     response_type: Mapped[str] = mapped_column(String(20), nullable=False)
     responded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    reached_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_latitude: Mapped[float | None] = mapped_column(Float)
+    last_longitude: Mapped[float | None] = mapped_column(Float)
+    location_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class Device(Timestamped, Base):
@@ -266,4 +291,39 @@ class LiveLocationUpdate(Base):
     accuracy: Mapped[float | None] = mapped_column(Float)
     recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class Conversation(Timestamped, Base):
+    __tablename__ = "conversations"
+    __table_args__ = (
+        Index("ix_conversations_alert_id", "alert_id"),
+        Index("ix_conversations_victim_helper", "victim_user_id", "helper_user_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    alert_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("emergencies.id", ondelete="CASCADE"), nullable=False)
+    victim_user_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    helper_user_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    is_admin_thread: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default=ConversationStatus.ACTIVE.value, nullable=False)
+
+
+class ChatMessage(Base):
+    __tablename__ = "chat_messages"
+    __table_args__ = (
+        Index("ix_chat_messages_conversation_created", "conversation_id", "created_at"),
+        UniqueConstraint("conversation_id", "client_message_id", name="uq_chat_message_client_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    conversation_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False)
+    client_message_id: Mapped[str] = mapped_column(String(96), nullable=False)
+    sender_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    receiver_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    transport: Mapped[str] = mapped_column(String(20), default=MessageTransport.INTERNET.value, nullable=False)
+    delivery_status: Mapped[str] = mapped_column(String(20), default=MessageDeliveryStatus.SENT.value, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 

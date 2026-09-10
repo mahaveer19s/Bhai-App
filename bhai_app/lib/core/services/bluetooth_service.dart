@@ -83,6 +83,7 @@ class BluetoothService {
   static const int typePresence = 1;
   static const int typeEmergencyAlert = 2;
   static const int typeAlertAck = 3;
+  static const int typeChatMessage = 4;
 
   StreamSubscription<dynamic>? _eventSubscription;
   final Map<String, BhaiNearbyDevice> _detectedDevices = {};
@@ -649,6 +650,24 @@ class BluetoothService {
     } catch (_) {}
   }
 
+  /// Broadcast a direct emergency chat message over BLE mesh radio.
+  Future<void> broadcastChatMessage({required String text, String targetId = 'FFFFFFFF'}) async {
+    if (kIsWeb) return;
+    try {
+      await stopAdvertising();
+      await startAdvertising(
+        type: typeChatMessage,
+        targetId: targetId,
+      );
+      // Revert to presence advertising after 3 seconds
+      Future.delayed(const Duration(seconds: 3), () {
+        if (_isAdvertising && _currentAdvertisingType == typeChatMessage) {
+          startPresenceAdvertising();
+        }
+      });
+    } catch (_) {}
+  }
+
   /// Sets up the native EventChannel listener.
   void _ensureEventListener() {
     if (_eventSubscription != null) return;
@@ -722,6 +741,11 @@ class BluetoothService {
             // Acknowledgment received from target
             if (targetId == myDeviceId.toUpperCase()) {
               _ackReceivedController.add(senderId);
+            }
+          } else if (type == typeChatMessage) {
+            final chatText = (map['chatText'] as String? ?? '').trim();
+            if (chatText.isNotEmpty) {
+              debugPrint('[BLE Chat Received] From $senderId: $chatText');
             }
           }
         } catch (e) {

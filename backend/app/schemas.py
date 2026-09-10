@@ -120,8 +120,10 @@ class NearbyEmergencyOut(BaseModel):
 
 
 class EmergencyResponseInput(BaseModel):
-    response_type: str = Field(pattern=r"^(ACKNOWLEDGED|HELPING|GOING_TO_HELP|CANNOT_HELP)$")
+    response_type: str = Field(pattern=r"^(ACKNOWLEDGED|COMING|GOING_TO_HELP|HELPING|REACHED|CANNOT_HELP)$")
     notes: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
 
 
 class EmergencyResponseOut(APIModel):
@@ -130,6 +132,52 @@ class EmergencyResponseOut(APIModel):
     helper_user_id: UUID
     response_type: str
     responded_at: datetime
+    reached_at: datetime | None = None
+    last_latitude: float | None = None
+    last_longitude: float | None = None
+
+
+class ConversationCreate(BaseModel):
+    alert_id: UUID
+    helper_user_id: UUID | None = None
+    is_admin_thread: bool = False
+
+
+class ConversationOut(APIModel):
+    id: UUID
+    alert_id: UUID
+    victim_user_id: UUID
+    helper_user_id: UUID | None = None
+    is_admin_thread: bool
+    status: str
+    created_at: datetime
+    last_message: str | None = None
+    last_message_at: datetime | None = None
+
+
+class ChatMessageCreate(BaseModel):
+    client_message_id: str = Field(min_length=6, max_length=96)
+    message: str = Field(min_length=1, max_length=2000)
+    transport: str = Field(default="INTERNET", pattern=r"^(INTERNET|BLUETOOTH)$")
+    receiver_id: UUID | None = None
+
+
+class ChatMessageOut(APIModel):
+    id: UUID
+    conversation_id: UUID
+    client_message_id: str
+    sender_id: UUID
+    receiver_id: UUID | None = None
+    message: str
+    transport: str
+    delivery_status: str
+    created_at: datetime
+    delivered_at: datetime | None = None
+    read_at: datetime | None = None
+
+
+class MessageStatusUpdate(BaseModel):
+    delivery_status: str = Field(pattern=r"^(DELIVERED|READ|FAILED)$")
 
 
 class DeviceRegister(BaseModel):

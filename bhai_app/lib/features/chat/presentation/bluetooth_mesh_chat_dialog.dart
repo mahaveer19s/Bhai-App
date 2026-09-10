@@ -1,24 +1,22 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../../../core/services/bluetooth_service.dart';
+import '../../../../core/services/chat_service.dart';
+import '../../../../core/services/chat_transport.dart';
+import '../../../../core/storage/local_storage.dart';
 import '../../../../core/theme/app_theme.dart';
 
-class MeshChatMessage {
-  final String senderId;
-  final String text;
-  final DateTime timestamp;
-  final bool isMe;
-
-  const MeshChatMessage({
-    required this.senderId,
-    required this.text,
-    required this.timestamp,
-    required this.isMe,
-  });
-}
-
 class BluetoothMeshChatDialog extends StatefulWidget {
-  const BluetoothMeshChatDialog({super.key});
+  final String? alertId;
+  final String? helperId;
+  final bool isAdminThread;
+
+  const BluetoothMeshChatDialog({
+    super.key,
+    this.alertId,
+    this.helperId,
+    this.isAdminThread = false,
+  });
 
   @override
   State<BluetoothMeshChatDialog> createState() => _BluetoothMeshChatDialogState();
@@ -26,64 +24,84 @@ class BluetoothMeshChatDialog extends StatefulWidget {
 
 class _BluetoothMeshChatDialogState extends State<BluetoothMeshChatDialog> {
   final _bluetooth = BluetoothService();
+  final _chatService = ChatService();
   final _textController = TextEditingController();
   final _scrollController = ScrollController();
-  static final List<MeshChatMessage> _sharedMessages = [];
-  late StreamSubscription<List<BhaiNearbyDevice>> _peerSub;
-  List<BhaiNearbyDevice> _peers = [];
+
+  String _conversationId = 'default-emergency-channel';
+  StreamSubscription<List<ChatMessageModel>>? _msgSub;
+  List<ChatMessageModel> _messages = [];
+  bool _isInternet = true;
+  Timer? _statusTimer;
 
   final List<String> _quickChips = [
-    'Are you safe?',
-    "I'm coming to help!",
-    'Where are you located?',
+    'Where are you?',
+    "I'm coming! (~300m away)",
+    'At the gate in blue shirt',
     'Emergency services notified (112)',
-    'Stay where you are, help is near',
+    'I have reached your location',
   ];
 
   @override
   void initState() {
     super.initState();
-    _peerSub = _bluetooth.nearbyDevicesStream.listen((devices) {
+    _chatService.initialize();
+    _initConversation();
+    _checkTransportStatus();
+    _statusTimer = Timer.periodic(const Duration(seconds: 4), (_) => _checkTransportStatus());
+  }
+
+  Future<void> _checkTransportStatus() async {
+    final online = await _bluetooth.isInternetConnected();
+    if (mounted && online != _isInternet) {
+      setState(() => _isInternet = online);
+    }
+  }
+
+  Future<void> _initConversation() async {
+    final alertId = widget.alertId ?? LocalStorage().activeRemoteEmergencyId ?? 'BHAI-MAIN';
+    final conv = await _chatService.getOrCreateConversation(
+      alertId,
+      helperUserId: widget.helperId,
+      isAdminThread: widget.isAdminThread,
+    );
+
+    if (!mounted) return;
+    setState(() {
+      _conversationId = conv.id;
+      _messages = _chatService.getMessages(conv.id);
+    });
+
+    _msgSub = _chatService.getMessagesStream(conv.id).listen((msgs) {
       if (mounted) {
-        setState(() => _peers = devices);
+        setState(() => _messages = msgs);
+        _scrollToBottom();
       }
     });
+
+    await _chatService.refreshMessages(conv.id);
   }
 
   @override
   void dispose() {
-    _peerSub.cancel();
+    _statusTimer?.cancel();
+    _msgSub?.cancel();
     _textController.dispose();
     _scrollController.dispose();
     super.dispose();
   }
 
-  void _sendMessage(String text) {
+  Future<void> _sendMessage(String text) async {
     final trimmed = text.trim();
     if (trimmed.isEmpty) return;
 
-    final msg = MeshChatMessage(
-      senderId: _bluetooth.myDeviceId,
-      text: trimmed,
-      timestamp: DateTime.now(),
-      isMe: true,
-    );
-
-    setState(() {
-      _sharedMessages.add(msg);
-    });
-
     _textController.clear();
-    _scrollToBottom();
-
-    // Broadcast over local Bluetooth / relay
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Transmitted via Bluetooth Mesh: "$trimmed"'),
-        duration: const Duration(seconds: 2),
-        backgroundColor: const Color(0xFF0284C7),
-      ),
+    await _chatService.sendMessage(
+      conversationId: _conversationId,
+      message: trimmed,
+      receiverId: widget.helperId,
     );
+    _scrollToBottom();
   }
 
   void _scrollToBottom() {
@@ -100,22 +118,24 @@ class _BluetoothMeshChatDialogState extends State<BluetoothMeshChatDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final myId = _bluetooth.myDeviceId;
+    final myId = LocalStorage().getOrGenerateBhaiDeviceId();
 
     return Dialog(
       backgroundColor: Colors.transparent,
-      insetPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 18),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
       child: Container(
-        height: MediaQuery.of(context).size.height * 0.82,
         decoration: BoxDecoration(
           color: const Color(0xFF0F172A),
           borderRadius: BorderRadius.circular(24),
-          border: Border.all(color: const Color(0xFF0284C7), width: 1.8),
+          border: Border.all(
+            color: const Color(0xFF00BCD4).withValues(alpha: 0.4),
+            width: 1.5,
+          ),
           boxShadow: [
             BoxShadow(
-              color: const Color(0xFF0284C7).withOpacity(0.35),
-              blurRadius: 28,
-              spreadRadius: 2,
+              color: Colors.black.withValues(alpha: 0.6),
+              blurRadius: 30,
+              offset: const Offset(0, 15),
             ),
           ],
         ),
@@ -123,20 +143,24 @@ class _BluetoothMeshChatDialogState extends State<BluetoothMeshChatDialog> {
           children: [
             // Header
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+              padding: const EdgeInsets.all(16),
               decoration: const BoxDecoration(
                 color: Color(0xFF1E293B),
-                borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
               ),
               child: Row(
                 children: [
                   Container(
                     padding: const EdgeInsets.all(8),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF0284C7).withOpacity(0.2),
+                      color: const Color(0xFF00BCD4).withValues(alpha: 0.15),
                       shape: BoxShape.circle,
                     ),
-                    child: const Icon(Icons.bluetooth_audio, color: Color(0xFF38BDF8), size: 24),
+                    child: const Icon(
+                      Icons.chat_bubble_outline_rounded,
+                      color: Color(0xFF00BCD4),
+                      size: 22,
+                    ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
@@ -144,111 +168,134 @@ class _BluetoothMeshChatDialogState extends State<BluetoothMeshChatDialog> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         const Text(
-                          'BLUETOOTH MESH CHAT',
-                          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+                          'BHAI EMERGENCY CHAT',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 15,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 0.5,
+                          ),
                         ),
-                        Text(
-                          'My ID: BHAI-$myId • ${_peers.length} Peers in Range',
-                          style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 12),
+                        const SizedBox(height: 2),
+                        Row(
+                          children: [
+                            Container(
+                              width: 8,
+                              height: 8,
+                              decoration: BoxDecoration(
+                                color: _isInternet ? const Color(0xFF10B981) : const Color(0xFF3B82F6),
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              _isInternet ? '🌐 Internet Active' : '📡 Bluetooth Direct Radio',
+                              style: TextStyle(
+                                color: _isInternet ? const Color(0xFF10B981) : const Color(0xFF93C5FD),
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
                         ),
                       ],
                     ),
                   ),
                   IconButton(
-                    icon: const Icon(Icons.close, color: Colors.white70),
+                    icon: const Icon(Icons.close_rounded, color: Colors.white70),
                     onPressed: () => Navigator.of(context).pop(),
                   ),
                 ],
               ),
             ),
 
-            // Nearby Peers Bar
-            if (_peers.isNotEmpty)
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                color: const Color(0xFF134E4A).withOpacity(0.4),
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    children: [
-                      const Icon(Icons.radar, color: Color(0xFF34D399), size: 16),
-                      const SizedBox(width: 6),
-                      const Text('Nearby:', style: TextStyle(color: Color(0xFF34D399), fontSize: 12, fontWeight: FontWeight.bold)),
-                      const SizedBox(width: 8),
-                      ..._peers.map((p) => Container(
-                            margin: const EdgeInsets.only(right: 8),
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF065F46),
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            child: Text(
-                              'BHAI-${p.deviceId} (${p.proximity})',
-                              style: const TextStyle(color: Colors.white, fontSize: 11),
-                            ),
-                          )),
-                    ],
-                  ),
-                ),
-              ),
-
             // Messages List
             Expanded(
-              child: _sharedMessages.isEmpty
+              child: _messages.isEmpty
                   ? Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(Icons.forum_outlined, color: Colors.white.withOpacity(0.2), size: 48),
-                          const SizedBox(height: 12),
-                          const Text(
-                            'Offline Bluetooth Mesh Channel',
-                            style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w600),
-                          ),
-                          const SizedBox(height: 6),
-                          const Padding(
-                            padding: EdgeInsets.symmetric(horizontal: 32),
-                            child: Text(
-                              'Send distress updates or questions to nearby Bhai devices without cellular or internet data.',
-                              textAlign: TextAlign.center,
-                              style: TextStyle(color: Colors.grey, fontSize: 12),
+                      child: Padding(
+                        padding: const EdgeInsets.all(24.0),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              _isInternet ? Icons.wifi_tethering_rounded : Icons.bluetooth_audio_rounded,
+                              size: 40,
+                              color: Colors.white24,
                             ),
-                          ),
-                        ],
+                            const SizedBox(height: 12),
+                            const Text(
+                              'Direct Encrypted Emergency Channel',
+                              style: TextStyle(color: Colors.white54, fontSize: 13, fontWeight: FontWeight.w600),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              _isInternet
+                                  ? 'Connected via Secure Realtime Cloud'
+                                  : 'Connected via 2.4 GHz Bluetooth Mesh (Offline)',
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(color: Colors.white38, fontSize: 11),
+                            ),
+                          ],
+                        ),
                       ),
                     )
                   : ListView.builder(
                       controller: _scrollController,
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                      itemCount: _sharedMessages.length,
-                      itemBuilder: (context, idx) {
-                        final m = _sharedMessages[idx];
+                      padding: const EdgeInsets.all(16),
+                      itemCount: _messages.length,
+                      itemBuilder: (context, index) {
+                        final msg = _messages[index];
+                        final isMe = msg.senderId.toUpperCase() == myId.toUpperCase() || msg.senderId == 'local';
+
                         return Align(
-                          alignment: m.isMe ? Alignment.centerRight : Alignment.centerLeft,
+                          alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
                           child: Container(
-                            margin: const EdgeInsets.symmetric(vertical: 4),
-                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                            margin: const EdgeInsets.only(bottom: 10),
                             constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.72),
+                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                             decoration: BoxDecoration(
-                              color: m.isMe ? const Color(0xFF0284C7) : const Color(0xFF334155),
-                              borderRadius: BorderRadius.circular(16),
+                              color: isMe ? const Color(0xFF00BCD4) : const Color(0xFF334155),
+                              borderRadius: BorderRadius.circular(16).copyWith(
+                                bottomRight: isMe ? const Radius.circular(2) : const Radius.circular(16),
+                                bottomLeft: !isMe ? const Radius.circular(2) : const Radius.circular(16),
+                              ),
                             ),
                             child: Column(
-                              crossAxisAlignment: m.isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                              crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
                               children: [
                                 Text(
-                                  m.isMe ? 'You (BHAI-$myId)' : 'Nearby BHAI-${m.senderId}',
+                                  msg.message,
                                   style: TextStyle(
-                                    color: m.isMe ? const Color(0xFFE0F2FE) : const Color(0xFF38BDF8),
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.bold,
+                                    color: isMe ? const Color(0xFF070B14) : Colors.white,
+                                    fontSize: 14,
+                                    fontWeight: isMe ? FontWeight.w600 : FontWeight.normal,
                                   ),
                                 ),
                                 const SizedBox(height: 4),
-                                Text(
-                                  m.text,
-                                  style: const TextStyle(color: Colors.white, fontSize: 14),
+                                Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(
+                                      '${msg.createdAt.hour.toString().padLeft(2, '0')}:${msg.createdAt.minute.toString().padLeft(2, '0')}',
+                                      style: TextStyle(
+                                        color: isMe ? Colors.black54 : Colors.white38,
+                                        fontSize: 10,
+                                      ),
+                                    ),
+                                    if (isMe) ...[
+                                      const SizedBox(width: 4),
+                                      Icon(
+                                        msg.deliveryStatus == 'READ'
+                                            ? Icons.done_all_rounded
+                                            : msg.deliveryStatus == 'DELIVERED'
+                                                ? Icons.done_all_rounded
+                                                : Icons.done_rounded,
+                                        size: 13,
+                                        color: msg.deliveryStatus == 'READ' ? const Color(0xFF1E293B) : Colors.black45,
+                                      ),
+                                    ],
+                                  ],
                                 ),
                               ],
                             ),
@@ -258,34 +305,34 @@ class _BluetoothMeshChatDialogState extends State<BluetoothMeshChatDialog> {
                     ),
             ),
 
-            // Quick Chips
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              color: const Color(0xFF1E293B),
-              child: SingleChildScrollView(
+            // Quick chips
+            SizedBox(
+              height: 42,
+              child: ListView.separated(
                 scrollDirection: Axis.horizontal,
-                child: Row(
-                  children: _quickChips.map((chip) {
-                    return Padding(
-                      padding: const EdgeInsets.only(right: 6),
-                      child: ActionChip(
-                        backgroundColor: const Color(0xFF0F172A),
-                        side: const BorderSide(color: Color(0xFF0284C7)),
-                        label: Text(chip, style: const TextStyle(color: Color(0xFF38BDF8), fontSize: 12)),
-                        onPressed: () => _sendMessage(chip),
-                      ),
-                    );
-                  }).toList(),
-                ),
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                itemCount: _quickChips.length,
+                separatorBuilder: (_, __) => const SizedBox(width: 6),
+                itemBuilder: (context, index) {
+                  return ActionChip(
+                    label: Text(_quickChips[index]),
+                    labelStyle: const TextStyle(fontSize: 11, color: Color(0xFF00BCD4), fontWeight: FontWeight.bold),
+                    backgroundColor: const Color(0xFF1E293B),
+                    side: const BorderSide(color: Color(0xFF334155)),
+                    onPressed: () => _sendMessage(_quickChips[index]),
+                  );
+                },
               ),
             ),
 
+            const SizedBox(height: 8),
+
             // Input Bar
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              padding: const EdgeInsets.all(12),
               decoration: const BoxDecoration(
-                color: Color(0xFF0F172A),
-                borderRadius: BorderRadius.vertical(bottom: Radius.circular(22)),
+                color: Color(0xFF1E293B),
+                borderRadius: BorderRadius.vertical(bottom: Radius.circular(24)),
               ),
               child: Row(
                 children: [
@@ -294,27 +341,29 @@ class _BluetoothMeshChatDialogState extends State<BluetoothMeshChatDialog> {
                       controller: _textController,
                       style: const TextStyle(color: Colors.white, fontSize: 14),
                       decoration: InputDecoration(
-                        hintText: 'Type Bluetooth distress message...',
-                        hintStyle: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 13),
+                        hintText: 'Type emergency message...',
+                        hintStyle: const TextStyle(color: Colors.white38, fontSize: 13),
                         filled: true,
-                        fillColor: const Color(0xFF1E293B),
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                        fillColor: const Color(0xFF0F172A),
                         border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(20),
+                          borderRadius: BorderRadius.circular(999),
                           borderSide: BorderSide.none,
                         ),
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                       ),
                       onSubmitted: _sendMessage,
                     ),
                   ),
                   const SizedBox(width: 8),
-                  IconButton(
-                    style: IconButton.styleFrom(
-                      backgroundColor: const Color(0xFF0284C7),
-                      foregroundColor: Colors.white,
+                  Container(
+                    decoration: const BoxDecoration(
+                      color: Color(0xFF00BCD4),
+                      shape: BoxShape.circle,
                     ),
-                    icon: const Icon(Icons.send_rounded, size: 20),
-                    onPressed: () => _sendMessage(_textController.text),
+                    child: IconButton(
+                      icon: const Icon(Icons.send_rounded, color: Color(0xFF070B14), size: 18),
+                      onPressed: () => _sendMessage(_textController.text),
+                    ),
                   ),
                 ],
               ),

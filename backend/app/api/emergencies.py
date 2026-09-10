@@ -639,17 +639,26 @@ async def add_location(
 @router.post("/emergencies/{emergency_id}/acknowledge", response_model=EmergencyResponseOut)
 @router.post("/api/emergency/{emergency_id}/acknowledge", response_model=EmergencyResponseOut)
 @router.post("/api/emergencies/{emergency_id}/acknowledge", response_model=EmergencyResponseOut)
+@router.post("/emergencies/{emergency_id}/respond", response_model=EmergencyResponseOut)
+@router.post("/api/emergency/{emergency_id}/respond", response_model=EmergencyResponseOut)
+@router.post("/api/emergencies/{emergency_id}/respond", response_model=EmergencyResponseOut)
 async def acknowledge_emergency(
     emergency_id: UUID,
     payload: EmergencyResponseInput,
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> EmergencyResponseOut:
+    now_utc = datetime.now(UTC)
+    reached_at_val = now_utc if payload.response_type == "REACHED" else None
+    
     IN_MEMORY_RESPONSES.append({
         "emergency_id": emergency_id,
         "helper_user_id": user.id,
         "response_type": payload.response_type,
-        "responded_at": datetime.now(UTC),
+        "responded_at": now_utc,
+        "reached_at": reached_at_val,
+        "last_latitude": payload.latitude,
+        "last_longitude": payload.longitude,
     })
 
     try:
@@ -658,9 +667,6 @@ async def acknowledge_emergency(
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This emergency is no longer active")
         if emergency.user_id == user.id:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="You cannot respond to your own emergency")
-        presence = await session.get(HelperPresence, user.id)
-        if presence is None or not presence.is_available or presence.last_location is None:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Enable verified helper mode before responding")
 
         existing = await session.scalar(
             select(EmergencyResponse).where(
@@ -669,34 +675,63 @@ async def acknowledge_emergency(
         )
         if existing is None:
             existing = EmergencyResponse(
-                emergency_id=emergency.id, helper_user_id=user.id, response_type=payload.response_type
+                emergency_id=emergency.id,
+                helper_user_id=user.id,
+                response_type=payload.response_type,
+                reached_at=reached_at_val,
+                last_latitude=payload.latitude,
+                last_longitude=payload.longitude,
+                location_updated_at=now_utc if payload.latitude else None,
             )
             session.add(existing)
         else:
             existing.response_type = payload.response_type
-            existing.responded_at = datetime.now(UTC)
+            existing.responded_at = now_utc
+            if payload.response_type == "REACHED":
+                existing.reached_at = now_utc
+            if payload.latitude is not None:
+                existing.last_latitude = payload.latitude
+                existing.last_longitude = payload.longitude
+                existing.location_updated_at = now_utc
+
         session.add(
             EmergencyAuditLog(
                 emergency_id=emergency.id,
                 actor_user_id=user.id,
                 action="HELPER_RESPONSE",
-                context={"response_type": payload.response_type},
+                context={"response_type": payload.response_type, "reached_at": reached_at_val.isoformat() if reached_at_val else None},
             )
         )
         await session.commit()
         await session.refresh(existing)
-        resp_payload = {"response_type": existing.response_type, "responded_at": existing.responded_at.isoformat()}
+        resp_payload = {
+            "emergency_id": str(emergency.id),
+            "helper_user_id": str(user.id),
+            "response_type": existing.response_type,
+            "responded_at": existing.responded_at.isoformat(),
+            "reached_at": existing.reached_at.isoformat() if existing.reached_at else None,
+            "last_latitude": existing.last_latitude,
+            "last_longitude": existing.last_longitude,
+        }
         await emergency_connections.broadcast(emergency.id, "helper_response", resp_payload)
-        await emergency_connections.broadcast_to_admin("helper_response", {"emergency_id": str(emergency.id), **resp_payload})
+        await emergency_connections.broadcast_to_admin("helper_response", resp_payload)
         return EmergencyResponseOut.model_validate(existing)
     except Exception:
         resp_payload = {
             "emergency_id": emergency_id,
             "helper_user_id": user.id,
             "response_type": payload.response_type,
-            "responded_at": datetime.now(UTC),
+            "responded_at": now_utc,
+            "reached_at": reached_at_val,
+            "last_latitude": payload.latitude,
+            "last_longitude": payload.longitude,
         }
-        await emergency_connections.broadcast_to_admin("helper_response", {"emergency_id": str(emergency_id), "response_type": payload.response_type})
+        await emergency_connections.broadcast_to_admin("helper_response", {
+            "emergency_id": str(emergency_id),
+            "helper_user_id": str(user.id),
+            "response_type": payload.response_type,
+            "reached_at": reached_at_val.isoformat() if reached_at_val else None,
+        })
         return EmergencyResponseOut(**resp_payload)
 
 

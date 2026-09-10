@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../core/services/emergency_service.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../chat/presentation/bluetooth_mesh_chat_dialog.dart';
 
 class VolunteerDashboardScreen extends StatefulWidget {
   const VolunteerDashboardScreen({super.key});
@@ -123,20 +124,36 @@ class _VolunteerDashboardScreenState extends State<VolunteerDashboardScreen> {
                   style: FilledButton.styleFrom(backgroundColor: AppTheme.accentCrimson),
                   child: _acknowledging.contains(event.id)
                       ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                      : const Text('I CAN HELP'),
+                      : const Text("I'M COMING (I CAN HELP)"),
                 ),
               ),
-              if (event.latitude != null && event.longitude != null && (event.latitude != 0.0 || event.longitude != 0.0)) ...[
-                const SizedBox(height: 8),
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    onPressed: () => _emergency.openNavigation(event.latitude!, event.longitude!),
-                    icon: const Icon(Icons.navigation, size: 18),
-                    label: const Text('📍 NAVIGATE (GOOGLE MAPS)'),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () {
+                        showDialog(
+                          context: context,
+                          builder: (_) => BluetoothMeshChatDialog(alertId: event.id),
+                        );
+                      },
+                      icon: const Icon(Icons.chat_bubble_outline_rounded, size: 16),
+                      label: const Text('CHAT'),
+                    ),
                   ),
-                ),
-              ],
+                  if (event.latitude != null && event.longitude != null && (event.latitude != 0.0 || event.longitude != 0.0)) ...[
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: () => _emergency.openNavigation(event.latitude!, event.longitude!),
+                        icon: const Icon(Icons.navigation, size: 16),
+                        label: const Text('NAVIGATE'),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
             ],
           ),
         ),

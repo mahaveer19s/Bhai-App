@@ -12,12 +12,12 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from sqlalchemy import select, text
 
-from app.api import admin, auth, contacts, emergencies, live_location, relay
+from app.api import admin, auth, chat, contacts, emergencies, live_location, relay
 from app.config import get_settings
 from app.database import Base, SessionLocal, engine
 from app.deps import get_user_from_token
-from app.models import Emergency, EmergencyResponse, UserRole
-from app.realtime import emergency_connections
+from app.models import Conversation, Emergency, EmergencyResponse, UserRole
+from app.realtime import chat_connections, emergency_connections
 from app.schemas import AppVersionOut
 from app.security import read_access_token
 from app.services.retention import purge_expired_location_history
@@ -72,6 +72,7 @@ app.include_router(auth.router)
 app.include_router(contacts.router)
 app.include_router(emergencies.router)
 app.include_router(live_location.router)
+app.include_router(chat.router)
 app.include_router(relay.router)
 app.include_router(admin.router)
 
@@ -115,7 +116,7 @@ async def get_version() -> AppVersionOut:
 
 
 # APK Direct Download Endpoint
-@app.api_route("/download/bhai_app.apk", methods=["GET", "HEAD"])
+@app.api_route("/download/bhai_app.apk", methods=["GET", "HEAD"], operation_id="download_apk_file")
 async def download_apk():
     """Stream or redirect to the real production Bhai App APK."""
     settings = get_settings()
@@ -191,6 +192,38 @@ async def admin_socket(websocket: WebSocket, token: str) -> None:
             await websocket.receive_text()
     except WebSocketDisconnect:
         emergency_connections.disconnect_admin(websocket)
+
+
+@app.websocket("/ws/chat/{conversation_id}")
+async def chat_socket(websocket: WebSocket, conversation_id: UUID, token: str) -> None:
+    """Real-time two-way emergency chat feed for authorized participants."""
+    async with SessionLocal() as session:
+        user = await get_user_from_token(token, session)
+        conversation = await session.get(Conversation, conversation_id)
+        authorized = False
+        if user and conversation:
+            if user.role == UserRole.ADMIN.value:
+                authorized = True
+            elif user.id == conversation.victim_user_id or user.id == conversation.helper_user_id:
+                authorized = True
+            else:
+                resp = await session.scalar(
+                    select(EmergencyResponse).where(
+                        EmergencyResponse.emergency_id == conversation.alert_id,
+                        EmergencyResponse.helper_user_id == user.id,
+                    )
+                )
+                authorized = resp is not None
+        if not authorized:
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+
+    await chat_connections.connect(conversation_id, websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        chat_connections.disconnect(conversation_id, websocket)
 
 
 # Static File Mounting

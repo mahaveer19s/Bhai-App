@@ -12,6 +12,7 @@ import '../security/security_service.dart';
 import '../state/emergency_state_machine.dart';
 import '../storage/local_storage.dart';
 import 'api_client.dart';
+import 'audio_service.dart';
 import 'bluetooth_service.dart';
 import 'location_service.dart';
 import 'notification_service.dart';
@@ -156,6 +157,10 @@ class EmergencyService {
     } catch (_) {}
 
     try {
+      await AudioAlertService().startSiren();
+    } catch (_) {}
+
+    try {
       await NotificationService().showEmergencyActive();
     } catch (_) {}
 
@@ -261,6 +266,7 @@ class EmergencyService {
     await _locationSubscription?.cancel();
     _locationSubscription = null;
     await _bluetooth.stopSosAdvertising();
+    await AudioAlertService().stopSiren();
     await NotificationService().clearEmergencyActive();
 
     _stateMachine.transitionTo(EmergencyState.cancelled, reason: reason);

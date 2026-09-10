@@ -56,3 +56,31 @@ class EmergencyConnectionManager:
 
 emergency_connections = EmergencyConnectionManager()
 
+
+class ChatConnectionManager:
+    def __init__(self) -> None:
+        self._connections: dict[UUID, set[WebSocket]] = defaultdict(set)
+
+    async def connect(self, conversation_id: UUID, socket: WebSocket) -> None:
+        await socket.accept()
+        self._connections[conversation_id].add(socket)
+
+    def disconnect(self, conversation_id: UUID, socket: WebSocket) -> None:
+        self._connections[conversation_id].discard(socket)
+        if not self._connections[conversation_id]:
+            self._connections.pop(conversation_id, None)
+
+    async def broadcast(self, conversation_id: UUID, event: str, data: dict[str, Any]) -> None:
+        message = {"event": event, "data": data}
+        stale: list[WebSocket] = []
+        for socket in list(self._connections.get(conversation_id, set())):
+            try:
+                await socket.send_json(message)
+            except Exception:
+                stale.append(socket)
+        for socket in stale:
+            self.disconnect(conversation_id, socket)
+
+
+chat_connections = ChatConnectionManager()
+

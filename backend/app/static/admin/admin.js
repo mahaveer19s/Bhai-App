@@ -326,10 +326,108 @@ function openIncidentModal(item, type) {
     document.getElementById('modal-updated').textContent = new Date(when).toLocaleTimeString();
 
     const mgmtBar = document.getElementById('modal-mgmt-bar');
+    const chatSection = document.getElementById('modal-chat-section');
     mgmtBar.style.display = type === 'EMERGENCY' ? 'flex' : 'none';
+    if (chatSection) {
+        chatSection.style.display = type === 'EMERGENCY' ? 'block' : 'none';
+        if (type === 'EMERGENCY') {
+            loadAdminChat(item.id);
+        }
+    }
 
     detailModal.style.display = 'flex';
 }
+
+// --- Admin Emergency Chat ---
+let currentAdminConversationId = null;
+
+async function loadAdminChat(alertId) {
+    const token = getAdminToken();
+    if (!token) return;
+    const msgContainer = document.getElementById('admin-chat-messages');
+    msgContainer.innerHTML = '<div style="color: #94a3b8; text-align: center; margin: auto;">Loading encrypted conversation...</div>';
+
+    try {
+        const convRes = await fetch('/chat/conversations', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+            body: JSON.stringify({ alert_id: alertId, is_admin_thread: true })
+        });
+        if (!convRes.ok) throw new Error('Could not initialize chat');
+        const conv = await convRes.json();
+        currentAdminConversationId = conv.id;
+
+        const msgRes = await fetch(`/chat/conversations/${conv.id}/messages`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        const messages = await msgRes.json();
+        renderAdminChatMessages(messages);
+    } catch (e) {
+        msgContainer.innerHTML = '<div style="color: #ef4444; text-align: center; margin: auto;">Chat unavailable.</div>';
+    }
+}
+
+function renderAdminChatMessages(messages) {
+    const msgContainer = document.getElementById('admin-chat-messages');
+    msgContainer.innerHTML = '';
+    if (!messages || messages.length === 0) {
+        msgContainer.innerHTML = '<div style="color: #94a3b8; text-align: center; margin: auto;">No messages in this incident yet. Start communication below.</div>';
+        return;
+    }
+
+    messages.forEach(m => {
+        const el = document.createElement('div');
+        const isOperator = m.sender_id === '3960dfc0-a49f-4058-b470-61b9a603cd50' || m.transport === 'INTERNET';
+        el.style.cssText = `padding: 6px 10px; border-radius: 8px; max-width: 80%; line-height: 1.4; word-break: break-word; ${
+            isOperator ? 'align-self: flex-end; background: #00bcd4; color: #070b14; font-weight: 500;' : 'align-self: flex-start; background: #334155; color: #fff;'
+        }`;
+        const time = new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        el.innerHTML = `<div>${escapeHtml(m.message)}</div><div style="font-size: 9px; opacity: 0.75; text-align: right; margin-top: 2px;">${time} • ${m.transport}</div>`;
+        msgContainer.appendChild(el);
+    });
+    msgContainer.scrollTop = msgContainer.scrollHeight;
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+async function sendAdminMessage() {
+    const input = document.getElementById('admin-chat-input');
+    const text = input.value.trim();
+    if (!text || !currentAdminConversationId) return;
+
+    const token = getAdminToken();
+    const clientMsgId = 'adm-' + Date.now();
+    input.value = '';
+
+    try {
+        const res = await fetch(`/chat/conversations/${currentAdminConversationId}/messages`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+            body: JSON.stringify({ client_message_id: clientMsgId, message: text, transport: 'INTERNET' })
+        });
+        if (res.ok) {
+            const msg = await res.json();
+            // Refresh messages
+            const msgRes = await fetch(`/chat/conversations/${currentAdminConversationId}/messages`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            const messages = await msgRes.json();
+            renderAdminChatMessages(messages);
+        }
+    } catch (e) {
+        showToast('Failed to send message.');
+    }
+}
+
+document.getElementById('admin-chat-send').addEventListener('click', sendAdminMessage);
+document.getElementById('admin-chat-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') sendAdminMessage();
+});
+
 
 document.getElementById('modal-btn-close').addEventListener('click', () => {
     detailModal.style.display = 'none';

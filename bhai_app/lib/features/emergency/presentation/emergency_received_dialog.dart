@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
+import '../../../../core/services/api_client.dart';
 import '../../../../core/services/bluetooth_service.dart';
 import '../../../../core/theme/app_theme.dart';
+import '../../chat/presentation/bluetooth_mesh_chat_dialog.dart';
 
 /// Prominent, unmissable V2 emergency screen displayed when a nearby Bhai user broadcasts SOS.
 /// Features real GPS coordinates, one-tap Google Maps navigation, BLE ACK, and distance telemetry.
@@ -23,6 +25,7 @@ class _EmergencyReceivedDialogState extends State<EmergencyReceivedDialog>
   late AnimationController _pulseController;
   late Animation<double> _scaleAnimation;
   bool _hasResponded = false;
+  bool _hasReached = false;
   double? _calculatedDistanceMeters;
 
   @override
@@ -74,6 +77,30 @@ class _EmergencyReceivedDialogState extends State<EmergencyReceivedDialog>
         widget.alert.longitude != null &&
         (widget.alert.latitude != 0.0 || widget.alert.longitude != 0.0)) {
       await BluetoothService().openGoogleMaps(widget.alert.latitude!, widget.alert.longitude!);
+    }
+  }
+
+  void _onReached() async {
+    setState(() => _hasReached = true);
+    try {
+      final pos = await Geolocator.getLastKnownPosition();
+      await ApiClient().post(
+        '/emergencies/${widget.alert.emergencyId}/respond',
+        body: {
+          'response_type': 'REACHED',
+          if (pos != null) 'latitude': pos.latitude,
+          if (pos != null) 'longitude': pos.longitude,
+        },
+      );
+    } catch (_) {}
+    await BluetoothService().broadcastChatMessage(text: 'REACHED', targetId: widget.alert.senderId);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Status updated: You have reached the victim.'),
+          backgroundColor: Color(0xFF059669),
+        ),
+      );
     }
   }
 
@@ -236,22 +263,24 @@ class _EmergencyReceivedDialogState extends State<EmergencyReceivedDialog>
 
               if (_hasResponded) ...[
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: const Color(0x2234D399),
+                    color: Colors.green.withOpacity(0.12),
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.green),
+                    border: Border.all(color: Colors.green.withOpacity(0.4)),
                   ),
-                  child: const Row(
+                  child: Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(Icons.check_circle, color: Colors.green),
-                      SizedBox(width: 8),
+                      const Icon(Icons.check_circle, color: Colors.green, size: 20),
+                      const SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          "Response Confirmed!\nBLE ACK sent: I'M GOING TO HELP.",
+                          _hasReached
+                              ? "✅ YOU HAVE REACHED THE SCENE!\nCommunication channel remains active."
+                              : "Response Confirmed: I'M COMING!\nVictim & Admin notified.",
                           textAlign: TextAlign.center,
-                          style: TextStyle(color: Colors.green, fontWeight: FontWeight.bold),
+                          style: const TextStyle(color: Colors.green, fontWeight: FontWeight.bold, fontSize: 13),
                         ),
                       ),
                     ],
@@ -259,7 +288,7 @@ class _EmergencyReceivedDialogState extends State<EmergencyReceivedDialog>
                 ),
                 const SizedBox(height: 14),
 
-                // If coordinates exist, show Navigate button even after responding
+                // Navigate button
                 if (hasCoords) ...[
                   SizedBox(
                     width: double.infinity,
@@ -270,9 +299,53 @@ class _EmergencyReceivedDialogState extends State<EmergencyReceivedDialog>
                         padding: const EdgeInsets.symmetric(vertical: 14),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                       ),
-                      icon: const Icon(Icons.navigation, size: 22),
+                      icon: const Icon(Icons.navigation, size: 20),
                       label: const Text('📍 NAVIGATE (GOOGLE MAPS)', style: TextStyle(fontWeight: FontWeight.bold)),
                       onPressed: _onNavigateToPerson,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                ],
+
+                // Emergency Chat button
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF00BCD4),
+                      foregroundColor: const Color(0xFF070B14),
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                    ),
+                    icon: const Icon(Icons.chat_bubble_outline_rounded, size: 20),
+                    label: const Text('💬 OPEN EMERGENCY CHAT', style: TextStyle(fontWeight: FontWeight.bold)),
+                    onPressed: () {
+                      showDialog(
+                        context: context,
+                        builder: (_) => BluetoothMeshChatDialog(
+                          alertId: widget.alert.emergencyId,
+                          helperId: widget.alert.senderId,
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                const SizedBox(height: 10),
+
+                // REACHED Button
+                if (!_hasReached) ...[
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF059669),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      ),
+                      icon: const Icon(Icons.flag_rounded, size: 20),
+                      label: const Text('🏁 I HAVE REACHED (REACHED)', style: TextStyle(fontWeight: FontWeight.bold)),
+                      onPressed: _onReached,
                     ),
                   ),
                   const SizedBox(height: 10),
@@ -288,7 +361,7 @@ class _EmergencyReceivedDialogState extends State<EmergencyReceivedDialog>
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                     ),
                     onPressed: () => Navigator.of(context).pop(),
-                    child: const Text('DISMISS'),
+                    child: const Text('CLOSE DIALOG'),
                   ),
                 ),
               ] else ...[

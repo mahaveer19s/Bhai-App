@@ -173,6 +173,21 @@
                     <button class="btn-mgmt btn-resolve" id="modal-btn-resolve">Resolve Incident</button>
                     <button class="btn-mgmt btn-cancel" id="modal-btn-cancel">Cancel Incident</button>
                 </div>
+
+                <!-- Admin ↔ Victim Realtime Chat Panel -->
+                <div id="modal-chat-section" style="margin-top: 18px; border-top: 1px solid rgba(255, 255, 255, 0.1); padding-top: 16px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                        <span style="font-weight: 700; font-size: 13px; color: #00bcd4;">💬 DIRECT EMERGENCY CHAT (VICTIM ↔ COMMAND)</span>
+                        <span style="font-size: 11px; color: #10b981; font-weight: 600;">🌐 Realtime Cloud Active</span>
+                    </div>
+                    <div id="admin-chat-messages" style="height: 140px; background: rgba(0, 0, 0, 0.35); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 10px; padding: 10px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; font-size: 12px;">
+                        <div style="color: #94a3b8; text-align: center; margin: auto;">No messages in this incident yet.</div>
+                    </div>
+                    <div style="display: flex; gap: 8px; margin-top: 8px;">
+                        <input type="text" id="admin-chat-input" placeholder="Type message to victim / responders..." style="flex: 1; background: rgba(15, 23, 42, 0.8); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 8px; color: #fff; padding: 8px 12px; font-size: 12px;">
+                        <button type="button" id="admin-chat-send" style="background: #00bcd4; color: #070b14; font-weight: bold; border: none; border-radius: 8px; padding: 8px 16px; cursor: pointer;">Send</button>
+                    </div>
+                </div>
             </div>
             <div class="modal-footer">
                 <button class="btn-close" id="modal-btn-close">Close Inspector</button>
