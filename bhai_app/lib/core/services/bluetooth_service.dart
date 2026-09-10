@@ -255,10 +255,13 @@ class BluetoothService {
             final status = item['status']?.toString() ?? '';
             final helperCount = (item['helper_count'] as num?)?.toInt() ?? 0;
 
-            // If a helper responded to our alert, notify ACK stream!
-            if (sender == myDeviceId.toUpperCase() && helperCount > 0) {
+            // If a helper responded to our alert, notify ACK stream ONLY while SOS is actively broadcasting!
+            if (sender == myDeviceId.toUpperCase() &&
+                helperCount > 0 &&
+                ((_isAdvertising && _currentAdvertisingType == typeEmergencyAlert) || _myActiveEmergencyId != null)) {
               _ackReceivedController.add('HELPER_CONFIRMED');
             }
+
 
             // CRITICAL V2: Strict self-alert prevention & cross-transport deduplication
             if (sender.isEmpty || sender == myDeviceId.toUpperCase()) continue;

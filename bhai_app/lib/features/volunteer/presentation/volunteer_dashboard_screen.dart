@@ -42,8 +42,14 @@ class _VolunteerDashboardScreenState extends State<VolunteerDashboardScreen> {
       await _emergency.acknowledge(event.id, helping: true);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('The protected user has been told that a nearby BHAI is helping.')),
+          const SnackBar(
+            content: Text('Response confirmed! Opening navigation to victim...'),
+            backgroundColor: Colors.green,
+          ),
         );
+      }
+      if (event.latitude != null && event.longitude != null && (event.latitude != 0.0 || event.longitude != 0.0)) {
+        await _emergency.openNavigation(event.latitude!, event.longitude!);
       }
       await _load();
     } catch (_) {
@@ -56,6 +62,7 @@ class _VolunteerDashboardScreenState extends State<VolunteerDashboardScreen> {
       if (mounted) setState(() => _acknowledging.remove(event.id));
     }
   }
+
 
   @override
   Widget build(BuildContext context) => Scaffold(
@@ -119,10 +126,22 @@ class _VolunteerDashboardScreenState extends State<VolunteerDashboardScreen> {
                       : const Text('I CAN HELP'),
                 ),
               ),
+              if (event.latitude != null && event.longitude != null && (event.latitude != 0.0 || event.longitude != 0.0)) ...[
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: () => _emergency.openNavigation(event.latitude!, event.longitude!),
+                    icon: const Icon(Icons.navigation, size: 18),
+                    label: const Text('📍 NAVIGATE (GOOGLE MAPS)'),
+                  ),
+                ),
+              ],
             ],
           ),
         ),
       );
+
 
   String _distance(int meters) => meters < 1000 ? '${meters}m away' : '${(meters / 1000).toStringAsFixed(1)}km away';
   String _age(DateTime time) {

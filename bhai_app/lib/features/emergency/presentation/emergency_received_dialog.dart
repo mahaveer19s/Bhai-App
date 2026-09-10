@@ -69,7 +69,14 @@ class _EmergencyReceivedDialogState extends State<EmergencyReceivedDialog>
   void _onGoingToHelp() async {
     setState(() => _hasResponded = true);
     await BluetoothService().goingToHelp(widget.alert.senderId, widget.alert.emergencyId);
+    if (widget.alert.hasLocation &&
+        widget.alert.latitude != null &&
+        widget.alert.longitude != null &&
+        (widget.alert.latitude != 0.0 || widget.alert.longitude != 0.0)) {
+      await BluetoothService().openGoogleMaps(widget.alert.latitude!, widget.alert.longitude!);
+    }
   }
+
 
   void _onNavigateToPerson() async {
     if (widget.alert.hasLocation && widget.alert.latitude != null && widget.alert.longitude != null) {

@@ -6,7 +6,11 @@ import '../../../../core/services/api_client.dart';
 import '../../../../core/services/bluetooth_service.dart';
 import '../../../../core/services/emergency_service.dart';
 import '../../../../core/theme/app_theme.dart';
+import '../../chat/presentation/bluetooth_mesh_chat_dialog.dart';
 import '../../emergency/presentation/emergency_received_dialog.dart';
+
+
+
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -107,7 +111,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     });
 
     _ackSub = _bluetooth.ackReceivedStream.listen((helperSenderId) {
-      if (mounted) {
+      if (mounted && _isBroadcastingSos) {
         setState(() {
           _acknowledgedHelperId = helperSenderId;
           _statusMessage = 'Helper BHAI-$helperSenderId confirmed: I AM COMING! 🏃';
@@ -121,6 +125,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         );
       }
     });
+
   }
 
   Future<void> _onBhaiHelpPressed() async {
@@ -510,6 +515,16 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         centerTitle: true,
         actions: [
           IconButton(
+            icon: const Icon(Icons.bluetooth_audio, color: Color(0xFF38BDF8)),
+            tooltip: 'Offline Bluetooth Mesh Chat',
+            onPressed: () {
+              showDialog<void>(
+                context: context,
+                builder: (_) => const BluetoothMeshChatDialog(),
+              );
+            },
+          ),
+          IconButton(
             icon: const Icon(Icons.refresh),
             tooltip: 'Check Status',
             onPressed: () {
@@ -520,6 +535,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             },
           ),
         ],
+
       ),
       body: SafeArea(
         child: SingleChildScrollView(
@@ -1164,8 +1180,29 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             ),
           ],
         ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: _actionTile(
+                icon: Icons.bluetooth_audio,
+                iconColor: const Color(0xFF38BDF8),
+                label: 'Bluetooth Mesh\nOffline Chat',
+                onTap: () {
+                  showDialog<void>(
+                    context: context,
+                    builder: (_) => const BluetoothMeshChatDialog(),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
       ],
     );
+  }
+
+
   }
 
   Widget _actionTile({

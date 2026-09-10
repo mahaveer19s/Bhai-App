@@ -47,6 +47,8 @@ router = APIRouter(tags=["emergencies"])
 
 IN_MEMORY_EMERGENCIES: list[dict] = []
 IN_MEMORY_RESPONSES: list[dict] = []
+IN_MEMORY_PRESENCES: dict[str, dict] = {}
+
 
 
 def haversine_meters(lat1: float, lon1: float, lat2: float, lon2: float) -> int:
@@ -131,6 +133,14 @@ async def update_helper_presence(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> None:
+    IN_MEMORY_PRESENCES[str(user.id)] = {
+        "user_id": user.id,
+        "display_name": getattr(user, "display_name", None) or "Nearby Bhai",
+        "is_available": payload.is_available,
+        "latitude": payload.latitude,
+        "longitude": payload.longitude,
+        "location_updated_at": utc(payload.recorded_at),
+    }
     try:
         presence = await session.get(HelperPresence, user.id)
         if presence is None:
@@ -140,10 +150,14 @@ async def update_helper_presence(
         presence.last_latitude = payload.latitude
         presence.last_longitude = payload.longitude
         presence.location_updated_at = utc(payload.recorded_at)
-        presence.last_location = WKTElement(f"POINT({payload.longitude} {payload.latitude})", srid=4326)
+        try:
+            presence.last_location = WKTElement(f"POINT({payload.longitude} {payload.latitude})", srid=4326)
+        except Exception:
+            pass
         await session.commit()
     except Exception:
         pass
+
 
 
 @router.post("/notifications/register-device", status_code=status.HTTP_204_NO_CONTENT)
@@ -350,26 +364,52 @@ async def get_nearby_users(
         pass
 
     if not results:
-        # Dynamic fallback based on queried GPS coordinates
-        sample_helpers = [
-            (0.0012, 0.0014, "Rahul Sharma"),
-            (-0.0018, 0.0009, "Amit Patel"),
-            (0.0022, -0.0016, "Pooja Verma"),
-        ]
-        for dlat, dlon, name in sample_helpers:
-            dist = haversine_meters(latitude, longitude, latitude + dlat, longitude + dlon)
+        # Check in-memory live presences
+        for p in IN_MEMORY_PRESENCES.values():
+            if str(p.get("user_id")) == str(user.id) or not p.get("is_available"):
+                continue
+            if p.get("latitude") is None or p.get("longitude") is None:
+                continue
+            dist = haversine_meters(latitude, longitude, p["latitude"], p["longitude"])
             if dist <= radius_meters:
                 results.append(
                     NearbyUserOut(
-                        user_id=uuid4(),
-                        display_name=name,
+                        user_id=p["user_id"],
+                        display_name=p.get("display_name") or "Nearby Bhai",
                         distance_meters=dist,
                         is_available=True,
-                        last_updated_at=datetime.now(UTC),
+                        last_updated_at=p.get("location_updated_at") or datetime.now(UTC),
                     )
                 )
+        results.sort(key=lambda x: x.distance_meters)
+
+    if not results:
+        # Query HelperPresence table and filter by Haversine distance
+        try:
+            presences = (await session.scalars(select(HelperPresence).where(HelperPresence.is_available == True))).all()
+            for p in presences:
+                if p.user_id == user.id or p.last_latitude is None or p.last_longitude is None:
+                    continue
+                dist = haversine_meters(latitude, longitude, p.last_latitude, p.last_longitude)
+                if dist <= radius_meters:
+                    u = await session.get(User, p.user_id)
+                    results.append(
+                        NearbyUserOut(
+                            user_id=p.user_id,
+                            display_name=u.display_name if u else "Nearby Bhai",
+                            distance_meters=round(dist),
+                            is_available=True,
+                            last_updated_at=p.location_updated_at or datetime.now(UTC),
+                        )
+                    )
+            results.sort(key=lambda x: x.distance_meters)
+        except Exception:
+            pass
 
     return results
+
+
+
 
 
 @router.get("/emergencies/nearby", response_model=list[NearbyEmergencyOut])

@@ -28,17 +28,28 @@ class EmergencySnapshot {
 }
 
 class NearbyEmergency {
-  const NearbyEmergency({required this.id, required this.distanceMeters, required this.triggeredAt});
+  const NearbyEmergency({
+    required this.id,
+    required this.distanceMeters,
+    required this.triggeredAt,
+    this.latitude,
+    this.longitude,
+  });
   final String id;
   final int distanceMeters;
   final DateTime triggeredAt;
+  final double? latitude;
+  final double? longitude;
 
   factory NearbyEmergency.fromJson(Map<String, dynamic> json) => NearbyEmergency(
         id: json['id'].toString(),
-        distanceMeters: (json['distance_meters'] as num).round(),
-        triggeredAt: DateTime.parse(json['triggered_at'] as String).toLocal(),
+        distanceMeters: (json['distance_meters'] as num?)?.round() ?? 0,
+        triggeredAt: DateTime.tryParse(json['triggered_at']?.toString() ?? '')?.toLocal() ?? DateTime.now(),
+        latitude: (json['latitude'] as num?)?.toDouble(),
+        longitude: (json['longitude'] as num?)?.toDouble(),
       );
 }
+
 
 class EmergencyService {
   EmergencyService._();
