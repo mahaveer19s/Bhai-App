@@ -1,0 +1,55 @@
+services:
+  # ----------------------------------------------------------------------------
+  # BHAI Web Service: FastAPI Gateway, Web Simulator, Admin Radar & APK Server
+  # ----------------------------------------------------------------------------
+  - type: web
+    name: bhai-emergency-platform
+    runtime: python
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: bhai-postgres
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: OTP_HMAC_SECRET
+        generateValue: true
+      - key: ADMIN_EMAIL
+        value: admin@bhai.app
+      - key: ADMIN_PASSWORD
+        generateValue: true
+      - key: ENVIRONMENT
+        value: production
+      - key: CORS_ORIGINS
+        value: "*"
+      - key: EMERGENCY_RADIUS_METERS
+        value: "2000"
+      - key: EMERGENCY_NUMBER
+        value: "112"
+      - key: LOCATION_RETENTION_DAYS
+        value: "90"
+      - key: LIVE_LOCATION_INTERVAL_SECONDS
+        value: "5"
+      - key: DEV_OTP_CODE
+        value: "000000"
+      - key: APK_VERSION
+        value: "1.2.0"
+      - key: APK_SIZE_MB
+        value: "49.8"
+      - key: APK_FILE_PATH
+        value: ./bhai_app.apk
+
+databases:
+  # ----------------------------------------------------------------------------
+  # PostgreSQL with PostGIS Spatial Extensions
+  # ----------------------------------------------------------------------------
+  - name: bhai-postgres
+    plan: free
+    databaseName: bhai
+    user: bhai_user
+    ipAllowList: []
