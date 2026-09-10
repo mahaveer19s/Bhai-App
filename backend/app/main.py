@@ -115,7 +115,7 @@ async def get_version() -> AppVersionOut:
 
 
 # APK Direct Download Endpoint
-@app.get("/download/bhai_app.apk")
+@app.api_route("/download/bhai_app.apk", methods=["GET", "HEAD"])
 async def download_apk():
     """Stream or redirect to the real production Bhai App APK."""
     settings = get_settings()
@@ -124,6 +124,8 @@ async def download_apk():
 
     candidates = [
         Path(settings.apk_file_path),
+        Path(__file__).resolve().parent / "static" / "bhai_app.apk",
+        Path(__file__).resolve().parents[1] / "bhai_app.apk",
         Path(__file__).resolve().parents[2] / "bhai_app.apk",
         Path("/app/bhai_app.apk"),
         Path("./bhai_app.apk"),
