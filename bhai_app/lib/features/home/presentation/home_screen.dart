@@ -3,11 +3,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import '../../../../core/services/bluetooth_service.dart';
+import '../../../../core/services/chat_service.dart';
+import '../../../../core/services/chat_transport.dart';
 import '../../../../core/services/emergency_service.dart';
 import '../../../../core/services/location_service.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../chat/presentation/bluetooth_mesh_chat_dialog.dart';
 import '../../emergency/presentation/emergency_received_dialog.dart';
+import '../../volunteer/presentation/volunteer_dashboard_screen.dart';
 
 
 
@@ -39,6 +42,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   StreamSubscription<BhaiEmergencyAlert>? _incomingAlertSub;
   StreamSubscription<String>? _ackSub;
+  StreamSubscription<ChatMessageModel>? _incomingChatSub;
   Timer? _statusCheckTimer;
   late AnimationController _pulseController;
   late Animation<double> _scaleAnimation;
@@ -58,6 +62,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
     _checkHardwareStatus();
     _initStandby();
+    _checkNotificationLaunchPayload();
 
     // Periodically refresh Bluetooth, Internet, and Location states
     _statusCheckTimer = Timer.periodic(const Duration(seconds: 3), (_) {
@@ -65,11 +70,42 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     });
   }
 
+  void _checkNotificationLaunchPayload() {
+    _bluetooth.getNotificationLaunchPayload().then((payload) {
+      if (payload != null && mounted) {
+        _handleNotificationPayload(payload);
+      }
+    });
+  }
+
+  void _handleNotificationPayload(Map<String, dynamic> payload) {
+    final route = payload['route']?.toString();
+    final emId = payload['emergency_id']?.toString();
+    final convId = payload['conversation_id']?.toString();
+    final senderId = payload['sender_id']?.toString();
+
+    if (route == 'chat' && convId != null) {
+      showDialog<void>(
+        context: context,
+        builder: (_) => BluetoothMeshChatDialog(
+          alertId: convId,
+          helperId: senderId,
+        ),
+      );
+    } else if (route == 'emergency') {
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const VolunteerDashboardScreen()),
+      );
+    }
+  }
+
   @override
   void dispose() {
     _statusCheckTimer?.cancel();
     _incomingAlertSub?.cancel();
     _ackSub?.cancel();
+    _incomingChatSub?.cancel();
     _pulseController.dispose();
     _bluetooth.stopStandbyMode();
     if (_isLiveLocationSharing) {
@@ -126,6 +162,67 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       }
     });
 
+    // Real-time incoming chat listener for both Victim & Helper
+    _incomingChatSub = ChatService().incomingMessageStream.listen((msg) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: const Color(0xFF0F172A),
+          behavior: SnackBarBehavior.floating,
+          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: const BorderSide(color: Color(0xFF00BCD4), width: 1.5),
+          ),
+          duration: const Duration(seconds: 7),
+          content: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: const BoxDecoration(
+                  color: Color(0xFF00BCD4),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.chat_bubble, color: Colors.black, size: 18),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '💬 Message from BHAI-${msg.senderId}',
+                      style: const TextStyle(color: Colors.cyanAccent, fontWeight: FontWeight.bold, fontSize: 13),
+                    ),
+                    Text(
+                      msg.message,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: Colors.white, fontSize: 13),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          action: SnackBarAction(
+            label: 'OPEN CHAT',
+            textColor: Colors.cyanAccent,
+            onPressed: () {
+              showDialog<void>(
+                context: context,
+                builder: (_) => BluetoothMeshChatDialog(
+                  alertId: msg.conversationId,
+                  helperId: msg.senderId,
+                ),
+              );
+            },
+          ),
+        ),
+      );
+    });
+
     // Acquire initial location fix and announce presence to backend for nearby discovery
     try {
       LocationService().getBestAvailableLocation().then((pos) {
@@ -172,6 +269,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       _isActivating = false;
       _isLiveLocationSharing = false;
       _liveSessionId = null;
+      _emergencyId = null;
       _acknowledgedHelperId = null;
       _statusMessage = 'Standby • Ready to broadcast or detect nearby emergency alerts';
     });
@@ -228,16 +326,32 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   }
 
   void _openNavigation([double? lat, double? lon]) {
-    final targetLat = lat ?? _currentPosition?.latitude ?? 28.6273;
-    final targetLon = lon ?? _currentPosition?.longitude ?? 77.3725;
-    if (targetLat == 0.0 && targetLon == 0.0) return;
+    final targetLat = lat ?? _currentPosition?.latitude;
+    final targetLon = lon ?? _currentPosition?.longitude;
+    if (targetLat == null || targetLon == null || (targetLat == 0.0 && targetLon == 0.0)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('📍 Acquiring GPS fix... Please wait a moment for satellite lock.'),
+          backgroundColor: Colors.blueGrey,
+        ),
+      );
+      return;
+    }
     _emergencyService.openNavigation(targetLat, targetLon);
   }
 
   void _shareLocationLink([double? lat, double? lon]) {
-    final targetLat = lat ?? _currentPosition?.latitude ?? 28.6273;
-    final targetLon = lon ?? _currentPosition?.longitude ?? 77.3725;
-    if (targetLat == 0.0 && targetLon == 0.0) return;
+    final targetLat = lat ?? _currentPosition?.latitude;
+    final targetLon = lon ?? _currentPosition?.longitude;
+    if (targetLat == null || targetLon == null || (targetLat == 0.0 && targetLon == 0.0)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('📍 GPS location not yet acquired. Cannot generate location link.'),
+          backgroundColor: Colors.blueGrey,
+        ),
+      );
+      return;
+    }
     final text = _emergencyService.getSafeLocationShareText(targetLat, targetLon);
     Clipboard.setData(ClipboardData(text: text));
     ScaffoldMessenger.of(context).showSnackBar(
@@ -294,7 +408,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         } else {
           unified[bid] = {
             'id': bid,
-            'displayName': 'Bhai Peer $bid',
+            'displayName': 'Active Bhai Helper (#$bid)',
             'distanceMeters': null,
             'latitude': null,
             'longitude': null,
@@ -302,6 +416,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             'isBle': true,
             'bleProximity': bleDevice.proximity,
             'bleRssi': bleDevice.rssi,
+            'signalStrength': bleDevice.signalStrength,
           };
         }
       }
@@ -347,37 +462,91 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                 children: [
                   Row(
                     children: [
-                      const Icon(Icons.radar, color: Colors.cyanAccent, size: 24),
-                      const SizedBox(width: 8),
-                      Text(
-                        'Nearby Bhai Users (${users.length})',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF00BCD4).withOpacity(0.15),
+                          shape: BoxShape.circle,
                         ),
+                        child: const Icon(Icons.radar, color: Colors.cyanAccent, size: 22),
+                      ),
+                      const SizedBox(width: 10),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Nearby Bhai Network (${users.length})',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 17,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const Text(
+                            'Real-time Bluetooth & GPS discovery',
+                            style: TextStyle(color: Colors.white54, fontSize: 11),
+                          ),
+                        ],
                       ),
                     ],
                   ),
-                  IconButton(
-                    icon: const Icon(Icons.close, color: Colors.white70),
-                    onPressed: () => Navigator.pop(ctx),
+                  Row(
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.refresh, color: Colors.cyanAccent),
+                        tooltip: 'Rescan Nearby',
+                        onPressed: () {
+                          Navigator.pop(ctx);
+                          _findNearbyBhai();
+                        },
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.close, color: Colors.white70),
+                        onPressed: () => Navigator.pop(ctx),
+                      ),
+                    ],
                   ),
                 ],
               ),
               const SizedBox(height: 12),
               if (users.isEmpty) ...[
                 Container(
-                  padding: const EdgeInsets.all(24),
+                  padding: const EdgeInsets.all(28),
                   alignment: Alignment.center,
-                  child: const Column(
+                  child: Column(
                     children: [
-                      Icon(Icons.person_search, color: Colors.grey, size: 48),
-                      SizedBox(height: 10),
-                      Text(
-                        'No active Bhai users detected nearby via GPS or Bluetooth.',
+                      Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.05),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(Icons.person_search_rounded, color: Colors.cyanAccent, size: 42),
+                      ),
+                      const SizedBox(height: 14),
+                      const Text(
+                        'Scanning for Nearby Bhai Responders...',
                         textAlign: TextAlign.center,
-                        style: TextStyle(color: Colors.grey, fontSize: 14),
+                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15),
+                      ),
+                      const SizedBox(height: 6),
+                      const Text(
+                        'Ensure Bluetooth & Location are enabled on nearby devices running the Bhai App.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: Colors.grey, fontSize: 12),
+                      ),
+                      const SizedBox(height: 16),
+                      ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF00BCD4),
+                          foregroundColor: Colors.black,
+                        ),
+                        onPressed: () {
+                          Navigator.pop(ctx);
+                          _findNearbyBhai();
+                        },
+                        icon: const Icon(Icons.refresh, size: 18),
+                        label: const Text('SCAN AGAIN', style: TextStyle(fontWeight: FontWeight.bold)),
                       ),
                     ],
                   ),
@@ -391,7 +560,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     itemBuilder: (context, idx) {
                       final u = users[idx];
                       final id = u['id']?.toString() ?? 'User';
-                      final name = u['displayName']?.toString() ?? 'Bhai User';
+                      final name = u['displayName']?.toString() ?? 'Active Bhai Helper';
                       final dist = u['distanceMeters'] as int?;
                       final isGps = u['isGps'] == true;
                       final isBle = u['isBle'] == true;
@@ -404,10 +573,10 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                         transportBadge = '🌐 + 📡 Dual';
                         badgeColor = Colors.cyanAccent;
                       } else if (isGps) {
-                        transportBadge = '🌐 GPS';
+                        transportBadge = '🌐 GPS Live';
                         badgeColor = Colors.blueAccent;
                       } else {
-                        transportBadge = '📡 Bluetooth Direct';
+                        transportBadge = '📡 BLE Mesh';
                         badgeColor = Colors.greenAccent;
                       }
 
@@ -417,17 +586,34 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                       } else if (u['bleProximity'] != null) {
                         distanceText = u['bleProximity'].toString();
                       } else {
-                        distanceText = 'Nearby';
+                        distanceText = 'In Bluetooth Range';
                       }
 
                       return Container(
                         padding: const EdgeInsets.symmetric(vertical: 8),
                         child: Row(
                           children: [
-                            CircleAvatar(
-                              radius: 22,
-                              backgroundColor: badgeColor.withOpacity(0.15),
-                              child: Icon(Icons.person_pin_circle, color: badgeColor),
+                            Stack(
+                              children: [
+                                CircleAvatar(
+                                  radius: 24,
+                                  backgroundColor: const Color(0xFF1E293B),
+                                  child: Icon(Icons.shield_rounded, color: badgeColor, size: 26),
+                                ),
+                                Positioned(
+                                  right: 0,
+                                  bottom: 0,
+                                  child: Container(
+                                    width: 12,
+                                    height: 12,
+                                    decoration: BoxDecoration(
+                                      color: Colors.greenAccent,
+                                      shape: BoxShape.circle,
+                                      border: Border.all(color: const Color(0xFF0F172A), width: 2),
+                                    ),
+                                  ),
+                                ),
+                              ],
                             ),
                             const SizedBox(width: 12),
                             Expanded(
@@ -438,7 +624,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                     name,
                                     style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15),
                                   ),
-                                  const SizedBox(height: 2),
+                                  const SizedBox(height: 3),
                                   Row(
                                     children: [
                                       Text(
@@ -463,27 +649,48 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                 ],
                               ),
                             ),
-                            // Action buttons: Chat, Navigate, I'm Coming
-                            IconButton(
-                              icon: const Icon(Icons.chat, color: Colors.cyanAccent, size: 20),
-                              tooltip: 'Chat with User',
-                              onPressed: () {
-                                Navigator.pop(ctx);
-                                showDialog<void>(
-                                  context: context,
-                                  builder: (_) => BluetoothMeshChatDialog(helperId: id),
-                                );
-                              },
-                            ),
-                            if (uLat != null && uLon != null)
-                              IconButton(
-                                icon: const Icon(Icons.directions, color: Colors.greenAccent, size: 20),
-                                tooltip: 'Navigate',
+                            // Action buttons: Chat, Navigate
+                            Container(
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF00BCD4).withOpacity(0.15),
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: IconButton(
+                                icon: const Icon(Icons.chat_bubble_rounded, color: Colors.cyanAccent, size: 20),
+                                tooltip: 'Direct Chat with Helper',
                                 onPressed: () {
                                   Navigator.pop(ctx);
-                                  _openNavigation(uLat, uLon);
+                                  showDialog<void>(
+                                    context: context,
+                                    builder: (_) => BluetoothMeshChatDialog(helperId: id),
+                                  );
                                 },
                               ),
+                            ),
+                            const SizedBox(width: 8),
+                            Container(
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF2563EB).withOpacity(0.2),
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: IconButton(
+                                icon: const Icon(Icons.navigation_rounded, color: Color(0xFF38BDF8), size: 20),
+                                tooltip: 'Navigate to Person',
+                                onPressed: () {
+                                  Navigator.pop(ctx);
+                                  if (uLat != null && uLon != null) {
+                                    _openNavigation(uLat, uLon);
+                                  } else {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                        content: Text('📍 Direct BLE peer detected. Open chat to request location or send distress beacon.'),
+                                        backgroundColor: Color(0xFF0284C7),
+                                      ),
+                                    );
+                                  }
+                                },
+                              ),
+                            ),
                           ],
                         ),
                       );
@@ -545,6 +752,16 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         ),
         centerTitle: true,
         actions: [
+          IconButton(
+            icon: const Icon(Icons.shield_outlined, color: Colors.amberAccent),
+            tooltip: 'Nearby Active Emergencies',
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const VolunteerDashboardScreen()),
+              );
+            },
+          ),
           IconButton(
             icon: const Icon(Icons.bluetooth_audio, color: Color(0xFF38BDF8)),
             tooltip: 'Offline Bluetooth Mesh Chat',
@@ -820,7 +1037,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   Widget _permissionMissingBanner() {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: const Color(0x28F59E0B),
         borderRadius: BorderRadius.circular(16),
@@ -831,10 +1048,10 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           const Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(Icons.security, color: Colors.amberAccent, size: 22),
+              Icon(Icons.shield_outlined, color: Colors.amberAccent, size: 22),
               SizedBox(width: 8),
               Text(
-                'Permissions Required',
+                'Background Guard & Setup Required',
                 style: TextStyle(
                   color: Colors.amberAccent,
                   fontWeight: FontWeight.w900,
@@ -843,24 +1060,32 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               ),
             ],
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: 8),
           const Text(
-            'Nearby Bluetooth and Location permissions are required to scan & advertise.',
-            textAlign: TextAlign.center,
-            style: TextStyle(color: Colors.white70, fontSize: 13),
+            '• Notifications: Receive emergency alerts when Bhai is closed or screen is off.\n• Bluetooth & Location: Detect nearby distress signals and share GPS coordinates.\n• Battery Exemption: Keep emergency guard alive 24/7.',
+            textAlign: TextAlign.left,
+            style: TextStyle(color: Colors.white70, fontSize: 12, height: 1.4),
           ),
-          const SizedBox(height: 10),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.amber,
-              foregroundColor: Colors.black,
-              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
-            ),
-            onPressed: () async {
-              await _bluetooth.requestPermissions();
-              _checkHardwareStatus();
-            },
-            child: const Text('GRANT PERMISSIONS', style: TextStyle(fontWeight: FontWeight.bold)),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.amber,
+                    foregroundColor: Colors.black,
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                  ),
+                  onPressed: () async {
+                    await _bluetooth.requestPermissions();
+                    await _bluetooth.requestIgnoreBatteryOptimizations();
+                    _checkHardwareStatus();
+                  },
+                  icon: const Icon(Icons.check_circle_outline, size: 18),
+                  label: const Text('ALLOW ALL PERMISSIONS', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -1011,7 +1236,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     color: iconColor,
                   ),
                 ),
-                if (_acknowledgedHelperId != null) ...[
+                if (_isBroadcastingSos && _acknowledgedHelperId != null) ...[
                   const SizedBox(height: 4),
                   Text(
                     'Helper BHAI-$_acknowledgedHelperId has responded to your distress signal!',
@@ -1314,6 +1539,20 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                   showDialog<void>(
                     context: context,
                     builder: (_) => const BluetoothMeshChatDialog(),
+                  );
+                },
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _actionTile(
+                icon: Icons.shield_outlined,
+                iconColor: Colors.amberAccent,
+                label: 'Nearby Active\nEmergencies',
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const VolunteerDashboardScreen()),
                   );
                 },
               ),

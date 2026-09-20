@@ -67,13 +67,14 @@ class ChatMessageModel {
   };
 
   ChatMessageModel copyWith({
+    String? conversationId,
     String? deliveryStatus,
     DateTime? deliveredAt,
     DateTime? readAt,
   }) {
     return ChatMessageModel(
       id: id,
-      conversationId: conversationId,
+      conversationId: conversationId ?? this.conversationId,
       clientMessageId: clientMessageId,
       senderId: senderId,
       receiverId: receiverId,

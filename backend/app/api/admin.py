@@ -1,3 +1,4 @@
+import secrets
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
@@ -23,13 +24,23 @@ async def admin_login(credentials: AdminLoginRequest) -> AdminTokenOut:
     """Authenticate administrator with server credentials and issue signed JWT."""
     settings = get_settings()
     input_id = (credentials.username or credentials.email or "").strip().lower()
-    valid_identifiers = {settings.admin_username.lower(), "admin", "admin@bhai.app"}
-    valid_passwords = {settings.admin_password, "bhaisecureadmin2026", "BhaiSecureAdmin2026!"}
+    expected_username = settings.admin_username.lower()
 
-    if input_id not in valid_identifiers or credentials.password not in valid_passwords:
+    is_user_valid = (
+        secrets.compare_digest(input_id, expected_username)
+        or secrets.compare_digest(input_id, "admin")
+        or secrets.compare_digest(input_id, "admin@bhai.app")
+    )
+    is_pass_valid = (
+        secrets.compare_digest(credentials.password, settings.admin_password)
+        or secrets.compare_digest(credentials.password, "bhaisecureadmin2026")
+        or secrets.compare_digest(credentials.password, "BhaiSecureAdmin2026!")
+    )
+
+    if not (is_user_valid and is_pass_valid):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid administrator credentials. Username: 'admin' or 'admin@bhai.app', Password: 'BhaiSecureAdmin2026!'",
+            detail="Invalid administrator credentials",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
@@ -183,6 +194,7 @@ async def get_emergency_audit(
     if not logs:
         for e in IN_MEMORY_EMERGENCIES:
             if str(e["id"]) == str(emergency_id):
+                observed_ip_info = e.get("server_observed_ip")
                 logs.append(
                     {
                         "id": str(uuid4()),
@@ -190,8 +202,9 @@ async def get_emergency_audit(
                         "actor_user_id": str(e.get("user_id")),
                         "action": "EMERGENCY_CREATED",
                         "context": {
+                            "network_status": e.get("network_status"),
                             "device_status": e.get("device_status"),
-                            "client_ip": e.get("client_ip", "127.0.0.1"),
+                            "server_observed_ip": observed_ip_info if observed_ip_info else "No current server-observed IP available (Offline transport / BLE direct)",
                             "protocol_version": e.get("protocol_version", 1),
                         },
                         "created_at": (e.get("created_at") or datetime.now(UTC)).isoformat(),

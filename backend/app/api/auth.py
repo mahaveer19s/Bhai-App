@@ -1,3 +1,4 @@
+import os
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -15,7 +16,8 @@ from app.security import create_access_token, create_otp, hash_otp, verify_otp
 from app.services.notifications import send_otp
 
 router = APIRouter(prefix="/auth", tags=["auth"])
-limiter = Limiter(key_func=get_remote_address)
+limiter = Limiter(key_func=get_remote_address, enabled=os.getenv("TESTING", "0") != "1")
+
 
 
 def normalize_phone(phone: str) -> str:

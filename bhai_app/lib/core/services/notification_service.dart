@@ -80,6 +80,36 @@ class NotificationService {
     } catch (_) {}
   }
 
+  Future<void> showIncomingChatMessage({
+    required String senderId,
+    required String message,
+  }) async {
+    if (kIsWeb) return;
+    try {
+      await _plugin.show(
+        303,
+        '💬 Message from BHAI-$senderId',
+        message,
+        const NotificationDetails(
+          android: AndroidNotificationDetails(
+            'bhai_chat_messages',
+            'BHAI Emergency Chat',
+            channelDescription: 'Real-time messages between emergency victims and responders',
+            importance: Importance.max,
+            priority: Priority.high,
+            enableVibration: true,
+            playSound: true,
+          ),
+          iOS: DarwinNotificationDetails(
+            presentAlert: true,
+            presentBadge: true,
+            presentSound: true,
+          ),
+        ),
+      );
+    } catch (_) {}
+  }
+
   Future<void> clearNearbyAlert() async {
     if (kIsWeb) return;
     try {

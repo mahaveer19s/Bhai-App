@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     apk_download_url: str | None = None
     apk_file_path: str = "../bhai_app.apk"
     live_location_interval_seconds: int = 5
-    session_expiry_minutes: int = 60
+    trusted_proxies: str = "127.0.0.1,::1"
 
     @property
     def async_database_url(self) -> str:
@@ -41,6 +41,10 @@ class Settings(BaseSettings):
     @property
     def origins(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    @property
+    def trusted_proxies_list(self) -> list[str]:
+        return [proxy.strip() for proxy in self.trusted_proxies.split(",") if proxy.strip()]
 
 
 

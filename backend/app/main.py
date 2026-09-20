@@ -65,13 +65,31 @@ app = FastAPI(
 app.state.limiter = auth.limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+settings = get_settings()
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
-    allow_methods=["*"],
+    allow_origins=settings.origins if settings.environment.lower() == "production" else ["*"],
+    allow_credentials=True if settings.environment.lower() == "production" else False,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
+
+
+from fastapi import Request
+
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "geolocation=(self), microphone=(), camera=()"
+    if get_settings().environment.lower() == "production":
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
 
 # API Routers
 app.include_router(auth.router)
@@ -79,6 +97,8 @@ app.include_router(contacts.router)
 app.include_router(emergencies.router)
 app.include_router(live_location.router)
 app.include_router(chat.router)
+app.include_router(chat.router, prefix="/api")
+app.include_router(chat.router, prefix="/api/v1")
 app.include_router(relay.router)
 app.include_router(admin.router)
 

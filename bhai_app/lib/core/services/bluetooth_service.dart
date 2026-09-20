@@ -89,7 +89,7 @@ class BluetoothService {
   StreamSubscription<dynamic>? _eventSubscription;
   final Map<String, BhaiNearbyDevice> _detectedDevices = {};
   Timer? _networkSyncTimer;
-  final Set<String> _handledEmergencyIds = {};
+  final Map<String, DateTime> _handledEmergencyTimestamps = {};
   final List<Map<String, dynamic>> _offlineEmergencyQueue = [];
   String? _myActiveEmergencyId;
 
@@ -198,10 +198,46 @@ class BluetoothService {
       final scan = await Permission.bluetoothScan.isGranted;
       final adv = await Permission.bluetoothAdvertise.isGranted;
       final loc = await Permission.location.isGranted;
-      return (scan && adv) || loc;
+      final notif = await Permission.notification.isGranted;
+      return (scan && adv) || loc || notif;
     } catch (_) {
       return false;
     }
+  }
+
+  /// Retrieves any pending notification launch payload from native Android.
+  Future<Map<String, dynamic>?> getNotificationLaunchPayload() async {
+    if (kIsWeb) return null;
+    try {
+      final res = await _channel.invokeMapMethod<String, dynamic>('getNotificationLaunchPayload');
+      return res;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Request exemption from aggressive OEM battery optimization for uninterrupted background safety guard.
+  Future<void> requestIgnoreBatteryOptimizations() async {
+    if (kIsWeb) return;
+    try {
+      await _channel.invokeMethod<void>('requestIgnoreBatteryOptimizations');
+    } catch (_) {}
+  }
+
+  /// Explicitly start the Android Foreground Service background guard.
+  Future<void> startBackgroundGuard() async {
+    if (kIsWeb) return;
+    try {
+      await _channel.invokeMethod<void>('startBackgroundGuard');
+    } catch (_) {}
+  }
+
+  /// Explicitly stop the Android Foreground Service background guard.
+  Future<void> stopBackgroundGuard() async {
+    if (kIsWeb) return;
+    try {
+      await _channel.invokeMethod<void>('stopBackgroundGuard');
+    } catch (_) {}
   }
 
   /// Launches Google Maps navigation directly to target coordinates.
@@ -280,11 +316,14 @@ class BluetoothService {
             if (emId.toUpperCase() == _myActiveEmergencyId) continue;
             if ('BHAI-$sender'.toUpperCase() == _myActiveEmergencyId) continue;
 
-            if (status == 'ACTIVE' &&
-                !_handledEmergencyIds.contains(emId.toUpperCase()) &&
-                !_handledEmergencyIds.contains('BHAI-$sender'.toUpperCase())) {
-              _handledEmergencyIds.add(emId.toUpperCase());
-              _handledEmergencyIds.add('BHAI-$sender'.toUpperCase());
+            final isHandledRecently = _handledEmergencyTimestamps.containsKey(emId.toUpperCase()) &&
+                DateTime.now().difference(_handledEmergencyTimestamps[emId.toUpperCase()]!).inSeconds < 15;
+            final isSenderHandledRecently = _handledEmergencyTimestamps.containsKey('BHAI-$sender'.toUpperCase()) &&
+                DateTime.now().difference(_handledEmergencyTimestamps['BHAI-$sender'.toUpperCase()]!).inSeconds < 15;
+
+            if (status == 'ACTIVE' && !isHandledRecently && !isSenderHandledRecently) {
+              _handledEmergencyTimestamps[emId.toUpperCase()] = DateTime.now();
+              _handledEmergencyTimestamps['BHAI-$sender'.toUpperCase()] = DateTime.now();
 
               final lat = (item['latitude'] as num?)?.toDouble();
               final lon = (item['longitude'] as num?)?.toDouble();
@@ -452,8 +491,8 @@ class BluetoothService {
   }) async {
     final emId = emergencyId ?? 'BHAI-${DateTime.now().millisecondsSinceEpoch % 1000000}-$myDeviceId';
     _myActiveEmergencyId = emId.toUpperCase();
-    _handledEmergencyIds.add(_myActiveEmergencyId!);
-    _handledEmergencyIds.add('BHAI-$myDeviceId'.toUpperCase());
+    _handledEmergencyTimestamps[_myActiveEmergencyId!] = DateTime.now();
+    _handledEmergencyTimestamps['BHAI-$myDeviceId'.toUpperCase()] = DateTime.now();
 
     // 1. Queue locally and sync to admin backend if online
     final payload = {
@@ -485,9 +524,19 @@ class BluetoothService {
     await startScanning();
   }
 
+  /// Resets all emergency-specific state to prepare for fresh SOS
+  void resetEmergencyState() {
+    _myActiveEmergencyId = null;
+    _handledEmergencyTimestamps.clear();
+    _detectedDevices.clear();
+    _incomingMessageChunks.clear();
+    _isAdvertising = false;
+    _currentAdvertisingType = 0;
+  }
+
   /// Stops emergency broadcast and returns to normal presence beacon mode.
   Future<void> stopEmergencyBroadcast() async {
-    _myActiveEmergencyId = null;
+    resetEmergencyState();
     await stopAdvertising();
     if (!kIsWeb) {
       await startPresenceAdvertising();
@@ -737,8 +786,10 @@ class BluetoothService {
             final alertEmId = 'BHAI-$senderId';
             if (alertEmId.toUpperCase() == _myActiveEmergencyId) return;
 
-            // CRITICAL V2: Strict cross-transport deduplication: If already handled via BLE or Internet, do not show duplicate
-            if (_handledEmergencyIds.contains(alertEmId.toUpperCase())) return;
+            // 15-second deduplication debounce for identical incoming packets
+            final lastHandled = _handledEmergencyTimestamps[alertEmId.toUpperCase()];
+            if (lastHandled != null && now.difference(lastHandled).inSeconds < 15) return;
+            _handledEmergencyTimestamps[alertEmId.toUpperCase()] = now;
 
             // Emergency SOS broadcast: Alert recipient
             final isForMe = targetId == '00000000' ||
@@ -746,8 +797,6 @@ class BluetoothService {
                 targetId == myDeviceId.toUpperCase();
 
             if (isForMe) {
-              _handledEmergencyIds.add(alertEmId.toUpperCase());
-
               // Trigger high-priority emergency notification
               NotificationService().showNearbyBluetoothAlert(
                 senderId: senderId,

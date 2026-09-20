@@ -6,6 +6,8 @@ import 'api_client.dart';
 import 'bluetooth_service.dart';
 import 'chat_transport.dart';
 
+import 'notification_service.dart';
+
 class ConversationModel {
   final String id;
   final String alertId;
@@ -48,9 +50,13 @@ class ChatService {
 
   final Map<String, List<ChatMessageModel>> _messagesByConversation = {};
   final Map<String, StreamController<List<ChatMessageModel>>> _controllers = {};
+  final StreamController<ChatMessageModel> _incomingMessageController = StreamController<ChatMessageModel>.broadcast();
+  final Set<String> _seenMessageIds = {};
   final List<ChatMessageModel> _offlineQueue = [];
   Timer? _queueProcessorTimer;
   StreamSubscription? _bleChatSubscription;
+
+  Stream<ChatMessageModel> get incomingMessageStream => _incomingMessageController.stream;
 
   void initialize() {
     _startQueueProcessor();
@@ -59,21 +65,28 @@ class ChatService {
       final senderId = data['senderId']?.toString() ?? 'UNKNOWN';
       final text = data['message']?.toString() ?? '';
       final msgKey = data['messageId']?.toString() ?? '';
-      final convId = 'ble-peer-$senderId';
+      final myId = LocalStorage().getOrGenerateBhaiDeviceId();
 
       final msg = ChatMessageModel(
-        id: msgKey.isNotEmpty ? msgKey : 'ble-$senderId-${DateTime.now().millisecondsSinceEpoch}',
-        conversationId: convId,
-        clientMessageId: msgKey,
+        id: msgKey.isNotEmpty ? 'ble-$msgKey' : 'ble-$senderId-${DateTime.now().millisecondsSinceEpoch}',
+        conversationId: 'ble-peer-$senderId',
+        clientMessageId: msgKey.isNotEmpty ? msgKey : 'client-ble-$senderId-${DateTime.now().millisecondsSinceEpoch}',
         senderId: senderId,
-        receiverId: LocalStorage().getOrGenerateBhaiDeviceId(),
+        receiverId: myId,
         message: text,
         transport: 'BLUETOOTH',
         deliveryStatus: 'DELIVERED',
         createdAt: (data['receivedAt'] as DateTime?) ?? DateTime.now(),
       );
 
-      ingestIncomingMessage(convId, msg);
+      ingestIncomingMessage('ble-peer-$senderId', msg);
+
+      // Fan out to all active conversations in memory
+      for (final convId in _messagesByConversation.keys.toList()) {
+        if (convId != 'ble-peer-$senderId') {
+          ingestIncomingMessage(convId, msg.copyWith(conversationId: convId));
+        }
+      }
     });
   }
 
@@ -132,13 +145,14 @@ class ChatService {
       if (isOnline) {
         final List<dynamic> data = await ApiClient().get('/chat/conversations/$conversationId/messages');
         final fetched = data.map((json) => ChatMessageModel.fromJson(json as Map<String, dynamic>)).toList();
-        _messagesByConversation[conversationId] = fetched;
-        _emitMessages(conversationId);
+        for (final m in fetched) {
+          _appendMessage(conversationId, m);
+        }
       }
     } catch (_) {}
   }
 
-  /// Send message with automatic transport selection (Internet if available, else Bluetooth Direct).
+  /// Send message with automatic dual-rail dispatch (Internet + Bluetooth BLE Mesh).
   Future<ChatMessageModel> sendMessage({
     required String conversationId,
     required String message,
@@ -147,9 +161,8 @@ class ChatService {
     final clientMsgId = 'msg-${DateTime.now().millisecondsSinceEpoch}-${LocalStorage().getOrGenerateBhaiDeviceId().substring(0, 4)}';
     final senderId = LocalStorage().getOrGenerateBhaiDeviceId();
 
-    // Determine best available transport
     final isInternet = await _internetTransport.isAvailable();
-    final MessageTransport transport = isInternet ? _internetTransport : _bluetoothTransport;
+    final isBle = await _bluetoothTransport.isAvailable();
 
     final pendingMsg = ChatMessageModel(
       id: clientMsgId,
@@ -158,20 +171,49 @@ class ChatService {
       senderId: senderId,
       receiverId: receiverId,
       message: message,
-      transport: isInternet ? 'INTERNET' : 'BLUETOOTH',
-      deliveryStatus: 'SENDING',
+      transport: (isInternet && isBle) ? 'DUAL' : (isInternet ? 'INTERNET' : (isBle ? 'BLUETOOTH' : 'OFFLINE')),
+      deliveryStatus: (isInternet || isBle) ? 'SENDING' : 'PENDING_OFFLINE',
       createdAt: DateTime.now(),
     );
 
     _appendMessage(conversationId, pendingMsg);
 
-    try {
-      final sent = await transport.sendMessage(conversationId, message, clientMsgId, receiverId: receiverId);
-      _updateMessage(conversationId, clientMsgId, sent);
-      return sent;
-    } catch (e) {
-      debugPrint('[ChatService] Send failed, queuing offline: $e');
-      final failed = pendingMsg.copyWith(deliveryStatus: 'WAITING FOR CONNECTION');
+    if (!isInternet && !isBle) {
+      final offline = pendingMsg.copyWith(deliveryStatus: 'PENDING_OFFLINE');
+      _updateMessage(conversationId, clientMsgId, offline);
+      _offlineQueue.add(offline);
+      return offline;
+    }
+
+    ChatMessageModel? resultMsg;
+
+    // 1. Internet transport path
+    if (isInternet) {
+      try {
+        resultMsg = await _internetTransport.sendMessage(conversationId, message, clientMsgId, receiverId: receiverId);
+        _updateMessage(conversationId, clientMsgId, resultMsg);
+      } catch (e) {
+        debugPrint('[ChatService] Internet send error: $e');
+      }
+    }
+
+    // 2. Bluetooth BLE mesh path (concurrent / fallback)
+    if (isBle) {
+      try {
+        final bleMsg = await _bluetoothTransport.sendMessage(conversationId, message, clientMsgId, receiverId: receiverId);
+        if (resultMsg == null) {
+          resultMsg = bleMsg;
+          _updateMessage(conversationId, clientMsgId, resultMsg);
+        }
+      } catch (e) {
+        debugPrint('[ChatService] BLE send error: $e');
+      }
+    }
+
+    if (resultMsg != null) {
+      return resultMsg;
+    } else {
+      final failed = pendingMsg.copyWith(deliveryStatus: 'PENDING_OFFLINE');
       _updateMessage(conversationId, clientMsgId, failed);
       _offlineQueue.add(failed);
       return failed;
@@ -191,6 +233,16 @@ class ChatService {
     );
     if (index == -1) {
       _messagesByConversation[conversationId]!.add(msg);
+      final myDevId = LocalStorage().getOrGenerateBhaiDeviceId().toUpperCase();
+      final msgKey = msg.id.isNotEmpty ? msg.id : msg.clientMessageId;
+      if (msg.senderId.toUpperCase() != myDevId && !_seenMessageIds.contains(msgKey)) {
+        _seenMessageIds.add(msgKey);
+        _incomingMessageController.add(msg);
+        NotificationService().showIncomingChatMessage(
+          senderId: msg.senderId,
+          message: msg.message,
+        );
+      }
     } else {
       _messagesByConversation[conversationId]![index] = msg;
     }

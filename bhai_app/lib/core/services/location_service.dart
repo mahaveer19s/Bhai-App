@@ -16,23 +16,10 @@ class LocationService {
     }
   }
 
-  Position _mockPosition() => Position(
-        latitude: 28.6273,
-        longitude: 77.3725,
-        timestamp: DateTime.now(),
-        accuracy: 15.0,
-        altitude: 0.0,
-        altitudeAccuracy: 0.0,
-        heading: 0.0,
-        headingAccuracy: 0.0,
-        speed: 0.0,
-        speedAccuracy: 0.0,
-      );
-
   Future<Position?> getBestAvailableLocation() async {
     try {
       final hasPerm = await checkPermission();
-      if (!hasPerm) return _mockPosition();
+      if (!hasPerm) return null;
       return await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(
           accuracy: LocationAccuracy.high,
@@ -42,9 +29,9 @@ class LocationService {
     } catch (_) {
       try {
         final last = await Geolocator.getLastKnownPosition();
-        return last ?? _mockPosition();
+        return last;
       } catch (_) {
-        return _mockPosition();
+        return null;
       }
     }
   }

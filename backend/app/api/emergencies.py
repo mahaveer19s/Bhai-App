@@ -41,6 +41,7 @@ from app.schemas import (
     NearbyUserOut,
 )
 from app.services.notifications import send_helper_alert, send_trusted_contact_alert
+from app.security import get_observed_client_ip
 
 router = APIRouter(tags=["emergencies"])
 
@@ -128,6 +129,8 @@ async def nearby_helper_ids(session: AsyncSession, latitude: float, longitude: f
 
 
 @router.put("/helpers/presence", status_code=status.HTTP_204_NO_CONTENT)
+@router.put("/api/helpers/presence", status_code=status.HTTP_204_NO_CONTENT)
+@router.put("/api/v1/emergencies/helpers/presence", status_code=status.HTTP_204_NO_CONTENT)
 async def update_helper_presence(
     payload: HelperPresenceUpdate,
     user: User = Depends(get_current_user),
@@ -266,10 +269,8 @@ async def create_emergency(
                 recorded_at=recorded_at,
             )
         )
-        client_ip = request.client.host if request.client else None
-        forwarded_for = request.headers.get("X-Forwarded-For")
-        if forwarded_for:
-            client_ip = forwarded_for.split(",")[0].strip()
+        observed_ip_data = get_observed_client_ip(request)
+        mem_record["server_observed_ip"] = observed_ip_data
 
         session.add(
             EmergencyAuditLog(
@@ -280,7 +281,7 @@ async def create_emergency(
                     "network_status": payload.network_status,
                     "idempotency_key": payload.idempotency_key,
                     "is_test": payload.is_test,
-                    "client_ip": client_ip,
+                    "server_observed_ip": observed_ip_data,
                 },
             )
         )
@@ -438,6 +439,9 @@ async def get_nearby_users(
 
 @router.get("/emergencies/nearby", response_model=list[NearbyEmergencyOut])
 @router.get("/api/emergencies/nearby", response_model=list[NearbyEmergencyOut])
+@router.get("/emergencies/active", response_model=list[NearbyEmergencyOut])
+@router.get("/api/emergencies/active", response_model=list[NearbyEmergencyOut])
+@router.get("/api/v1/emergencies/active", response_model=list[NearbyEmergencyOut])
 async def nearby_emergencies(
     user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)
 ) -> list[NearbyEmergencyOut]:
@@ -462,12 +466,14 @@ async def nearby_emergencies(
                     triggered_at=e["triggered_at"],
                     sender_id=e.get("sender_id", str(e.get("user_id", ""))),
                     helper_count=acks,
+                    latitude=e.get("last_latitude") or e.get("initial_latitude"),
+                    longitude=e.get("last_longitude") or e.get("initial_longitude"),
+                    accuracy=e.get("last_accuracy") or e.get("initial_accuracy"),
                 )
             )
     if results:
         results.sort(key=lambda x: x.distance_meters)
         return results
-
 
     try:
         presence = await session.get(HelperPresence, user.id)
@@ -477,6 +483,7 @@ async def nearby_emergencies(
             text(
                 """
                 SELECT e.id, e.status, e.triggered_at,
+                       e.last_latitude AS latitude, e.last_longitude AS longitude, e.last_accuracy AS accuracy,
                        ROUND(ST_Distance(
                            ST_SetSRID(ST_MakePoint(e.last_longitude, e.last_latitude), 4326)::geography,
                            hp.last_location
@@ -505,7 +512,7 @@ async def nearby_emergencies(
 @router.get("/emergencies/history", response_model=list[EmergencyOut])
 async def emergency_history(
     user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)
-) -> list[EmergencyOut]:
+):
     results = [EmergencyOut(**e) for e in IN_MEMORY_EMERGENCIES if e.get("user_id") == user.id]
     try:
         events = (
@@ -535,6 +542,9 @@ async def active_emergencies() -> list[NearbyEmergencyOut]:
                     triggered_at=e["triggered_at"],
                     sender_id=e.get("sender_id", str(e.get("user_id", ""))),
                     helper_count=acks,
+                    latitude=e.get("last_latitude") or e.get("initial_latitude"),
+                    longitude=e.get("last_longitude") or e.get("initial_longitude"),
+                    accuracy=e.get("last_accuracy") or e.get("initial_accuracy"),
                 )
             )
     return results
@@ -549,27 +559,9 @@ async def get_emergency(
     for e in IN_MEMORY_EMERGENCIES:
         if str(e["id"]) == str(emergency_id):
             return EmergencyOut(**e)
-    try:
-        emergency = await get_emergency_or_404(session, emergency_id)
-        await require_exact_location_access(session, emergency, user)
-        return as_emergency(emergency)
-    except Exception:
-        return EmergencyOut(
-            id=emergency_id,
-            user_id=user.id,
-            status=EmergencyStatus.ACTIVE.value,
-            initial_latitude=28.6273,
-            initial_longitude=77.3725,
-            initial_accuracy=10.0,
-            last_latitude=28.6273,
-            last_longitude=77.3725,
-            last_accuracy=10.0,
-            triggered_at=datetime.now(UTC),
-            last_location_at=datetime.now(UTC),
-            created_at=datetime.now(UTC),
-            updated_at=datetime.now(UTC),
-            is_test=False,
-        )
+    emergency = await get_emergency_or_404(session, emergency_id)
+    await require_exact_location_access(session, emergency, user)
+    return as_emergency(emergency)
 
 
 @router.get("/emergencies/{emergency_id}/locations", response_model=list[EmergencyLocationOut])
@@ -837,25 +829,10 @@ async def cancel_emergency(
         await emergency_connections.broadcast_to_admin("emergency_cancelled", {"id": str(emergency.id), "status": "CANCELLED"})
         await emergency_connections.close_event(emergency.id)
         return as_emergency(emergency)
-    except Exception:
-        out = EmergencyOut(
-            id=emergency_id,
-            user_id=user.id,
-            status="CANCELLED",
-            initial_latitude=28.6273,
-            initial_longitude=77.3725,
-            initial_accuracy=10.0,
-            last_latitude=28.6273,
-            last_longitude=77.3725,
-            last_accuracy=10.0,
-            triggered_at=datetime.now(UTC),
-            last_location_at=datetime.now(UTC),
-            created_at=datetime.now(UTC),
-            updated_at=datetime.now(UTC),
-            is_test=False,
-        )
-        await emergency_connections.broadcast_to_admin("emergency_cancelled", {"id": str(emergency_id), "status": "CANCELLED"})
-        return out
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
 
 @router.post("/emergencies/{emergency_id}/resolve", response_model=EmergencyOut)
@@ -887,26 +864,8 @@ async def resolve_emergency(
         return as_emergency(emergency)
     except HTTPException:
         raise
-    except Exception:
-        out = EmergencyOut(
-            id=emergency_id,
-            user_id=user.id,
-            status="RESOLVED",
-            initial_latitude=28.6273,
-            initial_longitude=77.3725,
-            initial_accuracy=10.0,
-            last_latitude=28.6273,
-            last_longitude=77.3725,
-            last_accuracy=10.0,
-            triggered_at=now,
-            last_location_at=now,
-            ended_at=now,
-            created_at=now,
-            updated_at=now,
-            is_test=False,
-        )
-        await emergency_connections.broadcast_to_admin("emergency_resolved", {"id": str(emergency_id), "status": "RESOLVED"})
-        return out
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
 
 @router.post("/emergencies/{emergency_id}/end", response_model=EmergencyOut)
@@ -935,24 +894,9 @@ async def end_emergency(
         await emergency_connections.broadcast_to_admin("emergency_ended", {"id": str(emergency.id), "status": EmergencyStatus.ENDED.value})
         await emergency_connections.close_event(emergency.id)
         return as_emergency(emergency)
-    except Exception:
-        out = EmergencyOut(
-            id=emergency_id,
-            user_id=user.id,
-            status=EmergencyStatus.ENDED.value,
-            initial_latitude=28.6273,
-            initial_longitude=77.3725,
-            initial_accuracy=10.0,
-            last_latitude=28.6273,
-            last_longitude=77.3725,
-            last_accuracy=10.0,
-            triggered_at=datetime.now(UTC),
-            last_location_at=datetime.now(UTC),
-            created_at=datetime.now(UTC),
-            updated_at=datetime.now(UTC),
-            is_test=False,
-        )
-        await emergency_connections.broadcast_to_admin("emergency_ended", {"id": str(emergency_id), "status": EmergencyStatus.ENDED.value})
-        return out
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
 

@@ -3,24 +3,25 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BHAI App — Your Brother is Always With You | Emergency Assistance</title>
-    <meta name="description" content="BHAI App is an emergency assistance and live-location sharing application connecting nearby users and emergency response centers in critical times.">
+    <title>BHAI App — Dual-Rail Emergency Safety & Mesh Network</title>
+    <meta name="description" content="BHAI App is a decentralized emergency assistance network with real GPS tracking, 24/7 background guard, and dual-rail Internet + Bluetooth Low Energy mesh communication.">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
     <style>
         :root {
-            --bg-base: #070b14;
-            --bg-card: rgba(18, 26, 43, 0.7);
-            --bg-card-hover: rgba(26, 38, 64, 0.85);
-            --primary: #00bcd4;
-            --primary-glow: rgba(0, 188, 212, 0.4);
+            --bg-base: #060913;
+            --bg-card: rgba(15, 23, 42, 0.75);
+            --bg-card-hover: rgba(30, 41, 59, 0.9);
+            --primary: #00e5ff;
+            --primary-glow: rgba(0, 229, 255, 0.35);
             --accent-red: #ff3366;
+            --accent-red-glow: rgba(255, 51, 102, 0.4);
             --accent-green: #10b981;
             --text-main: #f8fafc;
             --text-muted: #94a3b8;
             --border-glass: rgba(255, 255, 255, 0.08);
-            --border-glow: rgba(0, 188, 212, 0.25);
+            --border-glow: rgba(0, 229, 255, 0.3);
         }
 
         * {
@@ -45,19 +46,19 @@
             top: -150px;
             left: 50%;
             transform: translateX(-50%);
-            width: 800px;
-            height: 500px;
-            background: radial-gradient(circle, rgba(0, 188, 212, 0.18) 0%, rgba(7, 11, 20, 0) 70%);
+            width: 850px;
+            height: 550px;
+            background: radial-gradient(circle, rgba(0, 229, 255, 0.15) 0%, rgba(6, 9, 19, 0) 70%);
             z-index: 0;
             pointer-events: none;
         }
         .ambient-glow-2 {
             position: absolute;
-            top: 600px;
+            top: 700px;
             right: -100px;
-            width: 600px;
-            height: 600px;
-            background: radial-gradient(circle, rgba(255, 51, 102, 0.12) 0%, rgba(7, 11, 20, 0) 70%);
+            width: 650px;
+            height: 650px;
+            background: radial-gradient(circle, rgba(255, 51, 102, 0.12) 0%, rgba(6, 9, 19, 0) 70%);
             z-index: 0;
             pointer-events: none;
         }
@@ -70,9 +71,9 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
-            padding: 1.25rem 2.5rem;
-            background: rgba(7, 11, 20, 0.85);
-            backdrop-filter: blur(16px);
+            padding: 1.1rem 2.5rem;
+            background: rgba(6, 9, 19, 0.88);
+            backdrop-filter: blur(18px);
             border-bottom: 1px solid var(--border-glass);
             z-index: 100;
         }
@@ -80,20 +81,23 @@
         .brand-logo {
             display: flex;
             align-items: center;
-            gap: 0.75rem;
+            gap: 0.85rem;
             text-decoration: none;
             color: var(--text-main);
         }
         .brand-icon {
-            width: 38px;
-            height: 38px;
-            filter: drop-shadow(0 0 8px var(--primary));
+            width: 44px;
+            height: 44px;
+            border-radius: 12px;
+            border: 1.5px solid var(--primary);
+            box-shadow: 0 0 14px var(--primary-glow);
+            object-fit: cover;
         }
         .brand-title {
-            font-size: 1.5rem;
+            font-size: 1.6rem;
             font-weight: 900;
             letter-spacing: 2px;
-            background: linear-gradient(135deg, #fff 40%, var(--primary));
+            background: linear-gradient(135deg, #ffffff 40%, var(--primary));
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
         }
@@ -106,8 +110,8 @@
         .nav-link {
             color: var(--text-muted);
             text-decoration: none;
-            font-weight: 500;
             font-size: 0.95rem;
+            font-weight: 500;
             transition: color 0.2s;
         }
         .nav-link:hover {
@@ -116,83 +120,82 @@
         .btn-admin-nav {
             display: inline-flex;
             align-items: center;
-            gap: 0.4rem;
-            background: rgba(255, 255, 255, 0.05);
-            border: 1px solid var(--border-glass);
-            color: #cbd5e1;
-            padding: 0.5rem 1rem;
+            gap: 0.5rem;
+            background: rgba(0, 229, 255, 0.1);
+            color: var(--primary);
+            border: 1px solid var(--primary-glow);
+            padding: 0.5rem 1.1rem;
             border-radius: 9999px;
-            text-decoration: none;
-            font-size: 0.85rem;
+            font-size: 0.9rem;
             font-weight: 600;
+            text-decoration: none;
             transition: all 0.2s;
         }
         .btn-admin-nav:hover {
-            background: rgba(0, 188, 212, 0.15);
-            border-color: var(--primary);
-            color: #fff;
+            background: var(--primary);
+            color: #000;
+            box-shadow: 0 0 16px var(--primary-glow);
         }
 
-        /* Container */
         .container {
-            max-width: 1140px;
+            max-width: 1200px;
             margin: 0 auto;
-            padding: 2rem;
+            padding: 3rem 1.5rem;
             position: relative;
-            z-index: 10;
+            z-index: 1;
         }
 
-        /* Hero Section */
+        /* Hero */
         .hero {
             text-align: center;
-            padding: 4.5rem 1rem 3rem 1rem;
+            padding: 2.5rem 0 3.5rem;
         }
         .hero-badge {
             display: inline-flex;
             align-items: center;
             gap: 0.5rem;
-            background: rgba(0, 188, 212, 0.1);
+            background: rgba(0, 229, 255, 0.08);
             border: 1px solid var(--border-glow);
-            color: var(--primary);
-            padding: 0.4rem 1.2rem;
+            padding: 0.4rem 1.25rem;
             border-radius: 9999px;
             font-size: 0.85rem;
-            font-weight: 600;
-            letter-spacing: 0.5px;
-            margin-bottom: 1.75rem;
+            font-weight: 700;
+            letter-spacing: 1px;
+            color: var(--primary);
+            margin-bottom: 1.5rem;
         }
         .hero-badge-pulse {
             width: 8px;
             height: 8px;
+            background: var(--primary);
             border-radius: 50%;
-            background-color: var(--primary);
             box-shadow: 0 0 10px var(--primary);
-            animation: pulse-dot 1.8s infinite;
+            animation: pulse 1.8s infinite;
         }
-        @keyframes pulse-dot {
-            0%, 100% { opacity: 1; transform: scale(1); }
-            50% { opacity: 0.4; transform: scale(0.8); }
+        @keyframes pulse {
+            0% { transform: scale(0.95); opacity: 0.8; }
+            50% { transform: scale(1.3); opacity: 1; box-shadow: 0 0 14px var(--primary); }
+            100% { transform: scale(0.95); opacity: 0.8; }
         }
 
         .hero h1 {
-            font-size: clamp(2.5rem, 6vw, 4.2rem);
+            font-size: 3.25rem;
             font-weight: 900;
             line-height: 1.15;
-            letter-spacing: -1.5px;
-            margin-bottom: 1.5rem;
+            letter-spacing: -1px;
+            margin-bottom: 1.25rem;
         }
-        .hero h1 span.gradient-text {
-            background: linear-gradient(135deg, #ffffff 30%, var(--primary) 75%, #00e5ff 100%);
+        .gradient-text {
+            background: linear-gradient(135deg, var(--primary) 0%, #38bdf8 50%, #818cf8 100%);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
         }
-
         .hero p.tagline {
-            font-size: clamp(1.1rem, 2.5vw, 1.35rem);
+            font-size: 1.2rem;
             color: var(--text-muted);
-            max-width: 720px;
-            margin: 0 auto 2.5rem auto;
-            font-weight: 300;
+            max-width: 760px;
+            margin: 0 auto 2.5rem;
+            line-height: 1.6;
         }
 
         /* Hero CTA Group */
@@ -201,38 +204,38 @@
             flex-wrap: wrap;
             justify-content: center;
             align-items: center;
-            gap: 1rem;
-            margin-bottom: 3.5rem;
+            gap: 1.2rem;
+            margin-bottom: 2.5rem;
         }
         .btn-download-primary {
             display: inline-flex;
             align-items: center;
             gap: 0.75rem;
             background: linear-gradient(135deg, var(--primary), #0097a7);
-            color: #ffffff;
+            color: #060913;
             text-decoration: none;
-            padding: 1.1rem 2.5rem;
-            font-size: 1.15rem;
-            font-weight: 700;
+            padding: 1.15rem 2.8rem;
+            font-size: 1.2rem;
+            font-weight: 800;
             border-radius: 9999px;
             box-shadow: 0 10px 30px var(--primary-glow);
             transition: all 0.3s ease;
-            border: 1px solid rgba(255, 255, 255, 0.25);
+            border: 1px solid rgba(255, 255, 255, 0.3);
         }
         .btn-download-primary:hover {
             transform: translateY(-3px);
-            box-shadow: 0 16px 40px rgba(0, 188, 212, 0.55);
-            background: linear-gradient(135deg, #00e5ff, var(--primary));
+            box-shadow: 0 16px 40px rgba(0, 229, 255, 0.6);
+            background: linear-gradient(135deg, #7df9ff, var(--primary));
         }
 
         .btn-outline-admin {
             display: inline-flex;
             align-items: center;
             gap: 0.6rem;
-            background: rgba(255, 255, 255, 0.04);
+            background: rgba(255, 255, 255, 0.05);
             color: #f1f5f9;
             text-decoration: none;
-            padding: 1.1rem 2rem;
+            padding: 1.15rem 2.2rem;
             font-size: 1.05rem;
             font-weight: 600;
             border-radius: 9999px;
@@ -240,8 +243,8 @@
             transition: all 0.3s;
         }
         .btn-outline-admin:hover {
-            background: rgba(255, 255, 255, 0.08);
-            border-color: rgba(255, 255, 255, 0.25);
+            background: rgba(255, 255, 255, 0.1);
+            border-color: rgba(255, 255, 255, 0.3);
             transform: translateY(-2px);
         }
 
@@ -251,11 +254,11 @@
             flex-wrap: wrap;
             justify-content: center;
             gap: 1.5rem;
-            background: rgba(18, 26, 43, 0.5);
+            background: rgba(15, 23, 42, 0.6);
             border: 1px solid var(--border-glass);
-            padding: 0.75rem 1.75rem;
-            border-radius: 16px;
-            font-size: 0.88rem;
+            padding: 0.75rem 2rem;
+            border-radius: 9999px;
+            font-size: 0.9rem;
             color: var(--text-muted);
             margin-bottom: 4rem;
         }
@@ -266,80 +269,125 @@
         /* Features Grid */
         .section-header {
             text-align: center;
-            margin-bottom: 3rem;
+            margin-bottom: 3.5rem;
         }
         .section-header h2 {
-            font-size: 2.25rem;
+            font-size: 2.5rem;
             font-weight: 800;
             letter-spacing: -0.5px;
-            margin-bottom: 0.5rem;
+            margin-bottom: 0.6rem;
         }
         .section-header p {
             color: var(--text-muted);
-            font-size: 1.05rem;
+            font-size: 1.1rem;
         }
 
         .features-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-            gap: 1.5rem;
+            grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+            gap: 1.75rem;
             margin-bottom: 5rem;
         }
         .feature-card {
             background: var(--bg-card);
             border: 1px solid var(--border-glass);
-            border-radius: 20px;
-            padding: 2rem;
+            border-radius: 24px;
+            padding: 2.2rem;
             transition: all 0.3s ease;
-            backdrop-filter: blur(12px);
+            backdrop-filter: blur(14px);
         }
         .feature-card:hover {
             background: var(--bg-card-hover);
             border-color: var(--border-glow);
             transform: translateY(-4px);
-            box-shadow: 0 16px 40px rgba(0, 0, 0, 0.3);
+            box-shadow: 0 20px 45px rgba(0, 0, 0, 0.4);
         }
         .feature-icon {
-            width: 52px;
-            height: 52px;
-            border-radius: 14px;
+            width: 56px;
+            height: 56px;
+            border-radius: 16px;
             display: flex;
             align-items: center;
             justify-content: center;
-            margin-bottom: 1.25rem;
-            font-size: 1.6rem;
+            margin-bottom: 1.4rem;
+            font-size: 1.8rem;
         }
         .feature-icon.red { background: rgba(255, 51, 102, 0.15); color: var(--accent-red); }
-        .feature-icon.blue { background: rgba(0, 188, 212, 0.15); color: var(--primary); }
+        .feature-icon.blue { background: rgba(0, 229, 255, 0.15); color: var(--primary); }
         .feature-icon.green { background: rgba(16, 185, 129, 0.15); color: var(--accent-green); }
         .feature-icon.purple { background: rgba(168, 85, 247, 0.15); color: #c084fc; }
         .feature-icon.amber { background: rgba(245, 158, 11, 0.15); color: #fbbf24; }
 
         .feature-card h3 {
-            font-size: 1.3rem;
+            font-size: 1.35rem;
             font-weight: 700;
             margin-bottom: 0.6rem;
         }
         .feature-card p {
             color: var(--text-muted);
-            font-size: 0.95rem;
+            font-size: 0.98rem;
             line-height: 1.6;
+        }
+
+        /* How to Use Section */
+        .how-to-use-section {
+            background: rgba(15, 23, 42, 0.5);
+            border: 1px solid var(--border-glass);
+            border-radius: 32px;
+            padding: 3.5rem 2.5rem;
+            margin-bottom: 5rem;
+        }
+        .guide-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+            gap: 2rem;
+            margin-top: 2.5rem;
+        }
+        .guide-step {
+            background: rgba(6, 9, 19, 0.6);
+            border: 1px solid var(--border-glass);
+            border-radius: 20px;
+            padding: 1.75rem;
+            position: relative;
+        }
+        .step-number {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 36px;
+            height: 36px;
+            background: var(--primary);
+            color: #060913;
+            font-weight: 900;
+            border-radius: 50%;
+            font-size: 1.1rem;
+            margin-bottom: 1rem;
+        }
+        .guide-step h4 {
+            font-size: 1.2rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+        }
+        .guide-step p {
+            color: var(--text-muted);
+            font-size: 0.92rem;
+            line-height: 1.5;
         }
 
         /* Download / QR Section */
         .download-card {
-            background: linear-gradient(135deg, rgba(18, 26, 43, 0.9), rgba(11, 17, 30, 0.95));
+            background: linear-gradient(135deg, rgba(15, 23, 42, 0.95), rgba(6, 9, 19, 0.98));
             border: 1px solid var(--border-glow);
-            border-radius: 28px;
-            padding: 3rem 2rem;
+            border-radius: 32px;
+            padding: 3.5rem 2.5rem;
             margin-bottom: 5rem;
             display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 2.5rem;
+            grid-template-columns: 1.2fr 0.8fr;
+            gap: 3rem;
             align-items: center;
-            box-shadow: 0 24px 60px rgba(0, 0, 0, 0.4);
+            box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
         }
-        @media (max-width: 820px) {
+        @media (max-width: 860px) {
             .download-card {
                 grid-template-columns: 1fr;
                 text-align: center;
@@ -347,32 +395,32 @@
         }
 
         .download-info h3 {
-            font-size: 2rem;
+            font-size: 2.2rem;
             font-weight: 800;
             margin-bottom: 1rem;
         }
         .download-info p {
             color: var(--text-muted);
-            font-size: 1rem;
+            font-size: 1.05rem;
             margin-bottom: 1.5rem;
         }
 
         .steps-list {
             padding-left: 1.25rem;
             color: var(--text-muted);
-            font-size: 0.92rem;
-            margin-bottom: 1.75rem;
+            font-size: 0.95rem;
+            margin-bottom: 2rem;
             text-align: left;
         }
         .steps-list li {
-            margin-bottom: 0.5rem;
+            margin-bottom: 0.6rem;
         }
 
         .qr-card {
-            background: rgba(0, 0, 0, 0.4);
+            background: rgba(0, 0, 0, 0.5);
             border: 1px dashed var(--border-glow);
-            border-radius: 20px;
-            padding: 2rem;
+            border-radius: 24px;
+            padding: 2.2rem;
             display: flex;
             flex-direction: column;
             align-items: center;
@@ -380,13 +428,13 @@
             text-align: center;
         }
         .qr-image {
-            width: 170px;
-            height: 170px;
+            width: 190px;
+            height: 190px;
             background: #fff;
-            border-radius: 12px;
-            padding: 8px;
+            border-radius: 16px;
+            padding: 10px;
             border: 3px solid var(--primary);
-            margin-bottom: 1rem;
+            margin-bottom: 1.2rem;
         }
 
         /* Footer */
@@ -395,11 +443,15 @@
             padding: 2.5rem 2rem;
             text-align: center;
             color: var(--text-muted);
-            font-size: 0.9rem;
+            font-size: 0.95rem;
         }
         footer a {
             color: var(--primary);
             text-decoration: none;
+            margin: 0 0.5rem;
+        }
+        footer a:hover {
+            text-decoration: underline;
         }
     </style>
 </head>
@@ -411,11 +463,12 @@
     <!-- Header Navbar -->
     <header class="navbar">
         <a href="/" class="brand-logo">
-            <img src="/static/landing/bhai_logo.png" alt="BHAI Logo" style="width: 42px; height: 42px; border-radius: 10px; border: 1.5px solid var(--primary); box-shadow: 0 0 12px var(--primary-glow); object-fit: cover;">
+            <img src="/static/landing/bhai_logo.png" alt="BHAI Logo" class="brand-icon">
             <span class="brand-title">BHAI</span>
         </a>
         <div class="nav-links">
             <a href="#features" class="nav-link">Features</a>
+            <a href="#how-to-use" class="nav-link">How to Use</a>
             <a href="#download" class="nav-link">Download APK</a>
             <a href="/admin" class="btn-admin-nav" id="admin-panel-link">
                 <svg width="16" height="16" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
@@ -427,12 +480,12 @@
     <div class="container">
         <!-- Hero -->
         <section class="hero">
-            <div style="margin-bottom: 22px; display: flex; justify-content: center;">
-                <img src="/static/landing/bhai_logo.png" alt="BHAI App Official Logo" style="width: 140px; height: 140px; border-radius: 32px; box-shadow: 0 16px 40px rgba(0, 188, 212, 0.45), 0 0 25px rgba(255, 51, 102, 0.35); border: 2px solid rgba(0, 188, 212, 0.7); object-fit: cover;">
+            <div style="margin-bottom: 24px; display: flex; justify-content: center;">
+                <img src="/static/landing/bhai_logo.png" alt="BHAI App Official Logo" style="width: 140px; height: 140px; border-radius: 36px; box-shadow: 0 16px 45px rgba(0, 229, 255, 0.45), 0 0 30px rgba(255, 51, 102, 0.35); border: 2px solid rgba(0, 229, 255, 0.8); object-fit: cover;">
             </div>
             <div class="hero-badge">
                 <span class="hero-badge-pulse"></span>
-                <span>PRODUCTION EMERGENCY NETWORK ACTIVE</span>
+                <span>24/7 BACKGROUND EMERGENCY MESH ACTIVE</span>
             </div>
 
             <h1>
@@ -440,13 +493,13 @@
                 <span class="gradient-text">when you need it most.</span>
             </h1>
             <p class="tagline">
-                Bhai App empowers anyone in distress to instantly broadcast emergency SOS, share real-time live location every 5 seconds, navigate to nearby helpers, and coordinate through central emergency response.
+                Bhai App empowers anyone in distress to instantly broadcast emergency SOS, stream live location every 5 seconds, communicate via offline Bluetooth mesh & Internet chat, and alert nearby responders even when the app is closed.
             </p>
 
             <div class="cta-group">
-                <a href="/download/bhai_app.apk" class="btn-download-primary" id="hero-download-btn" download>
+                <a href="/download-apk" class="btn-download-primary" id="hero-download-btn">
                     <svg width="24" height="24" fill="currentColor" viewBox="0 0 24 24"><path d="M5,20H19V18H5M19,9H15V3H9V9H5L12,16L19,9Z"/></svg>
-                    Download Bhai App (APK)
+                    Download Bhai App (Latest APK)
                 </a>
                 <a href="/admin" class="btn-outline-admin">
                     🛡️ Open Admin Portal
@@ -454,58 +507,92 @@
             </div>
 
             <div class="apk-meta-bar" id="apk-meta-bar">
-                <span>Version: <strong id="apk-version-val">v1.2.0</strong></span>
+                <span>Version: <strong id="apk-version-val">v2.4.0</strong></span>
                 <span>•</span>
-                <span>Package Size: <strong id="apk-size-val">47.5 MB</strong></span>
+                <span>Package Size: <strong id="apk-size-val">432 MB (Debug Full-Symbols)</strong></span>
                 <span>•</span>
                 <span>Updated: <strong id="apk-date-val">September 2026</strong></span>
                 <span>•</span>
-                <span>Target: <strong>Android 8.0+</strong></span>
+                <span>Target: <strong>Android 8.0+ (Oreo to Android 15)</strong></span>
             </div>
         </section>
 
         <!-- Features Grid -->
         <section id="features">
             <div class="section-header">
-                <h2>Engineered for High-Pressure Emergencies</h2>
-                <p>Real coordinates. Sub-second response. Non-blocking asynchronous dispatch.</p>
+                <h2>Engineered for Extreme Emergency Reliability</h2>
+                <p>Dual-Rail Architecture • 100% Offline Mesh • Non-Blocking Asynchronous State</p>
             </div>
 
             <div class="features-grid">
                 <div class="feature-card">
                     <div class="feature-icon red">🚨</div>
-                    <h3>One-Touch Emergency Alert</h3>
-                    <p>Trigger immediate distress signals to verified nearby users and central monitoring. Protected with client-side idempotency to eliminate duplicate triggers.</p>
+                    <h3>One-Touch Instant SOS</h3>
+                    <p>Trigger immediate distress broadcast across 2.4GHz BLE airwaves and encrypted cloud API in <15ms. Includes high-intensity local siren, satellite GPS tracking, and repeated emergency lifecycle support.</p>
                 </div>
 
                 <div class="feature-card">
-                    <div class="feature-icon blue">📍</div>
-                    <h3>5-Second Live Location Stream</h3>
-                    <p>Independent, non-blocking GPS streaming every 5 seconds. Sessions are individually authenticated so one user never interferes with another.</p>
+                    <div class="feature-icon blue">💬</div>
+                    <h3>Dual-Rail Realtime & Offline Chat</h3>
+                    <p>Communicate seamlessly over Internet (WebSocket/REST) and 100% offline Bluetooth Low Energy Mesh radio chunks. Automatic deduplication ensures recipient views exactly one message bubble.</p>
                 </div>
 
                 <div class="feature-card">
-                    <div class="feature-icon green">👥</div>
-                    <h3>Nearby Bhai Discovery</h3>
-                    <p>Real geospatial discovery queries active nearby helpers using high-precision Haversine and PostGIS geospatial indexing.</p>
+                    <div class="feature-icon green">🔋</div>
+                    <h3>24/7 Background Guard</h3>
+                    <p>Powered by Android Foreground Services with Balanced BLE scan mode (~0.5% battery/hr). Delivers native alarm sounds and vibration alerts even when the app is minimized, screen is locked, or swiped from Recents.</p>
                 </div>
 
                 <div class="feature-card">
-                    <div class="feature-icon purple">🗺️</div>
-                    <h3>Instant Directions Navigation</h3>
-                    <p>Turn-by-turn routing with dynamic GPS coordinates directly launched into Google Maps or native mobile navigation apps.</p>
+                    <div class="feature-icon purple">📍</div>
+                    <h3>5-Second Live GPS Stream</h3>
+                    <p>Continuous satellite coordinates streamed every 5 seconds. Sessions are individually authenticated with zero fake coordinates, zero 0,0 fallbacks, and real geodesic Haversine distance calculation.</p>
                 </div>
 
                 <div class="feature-card">
-                    <div class="feature-icon amber">📲</div>
-                    <h3>Web Share & Fallback Copy</h3>
-                    <p>Share secure emergency coordinates via native mobile Web Share API with instant fallback to clipboard copying for emergency contacts.</p>
+                    <div class="feature-icon amber">👥</div>
+                    <h3>Multi-Victim Emergency Isolation</h3>
+                    <p>Strict entity isolation guarantees that multiple simultaneous emergencies (Victim A, Victim B, Victim C) maintain distinct coordinate tracks, isolated responder rosters, and private chat rooms.</p>
                 </div>
 
                 <div class="feature-card">
                     <div class="feature-icon blue">🛡️</div>
                     <h3>Admin Command Center</h3>
-                    <p>Dedicated real-time dashboard featuring live interactive map markers, incident history timeline, responder count, and WebSocket sync.</p>
+                    <p>Real-time incident radar with live map markers, audit logs, cryptographic device verification, and instant emergency resolution controls.</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- How to Use Section -->
+        <section id="how-to-use" class="how-to-use-section">
+            <div class="section-header" style="margin-bottom: 1.5rem;">
+                <h2>📖 How to Use Bhai App</h2>
+                <p>Simple, reliable 4-step workflow for both victims and nearby helpers.</p>
+            </div>
+
+            <div class="guide-grid">
+                <div class="guide-step">
+                    <div class="step-number">1</div>
+                    <h4>Install & Allow Setup</h4>
+                    <p>Install the APK and tap <strong>"ALLOW ALL PERMISSIONS"</strong> once to enable background alarms, Bluetooth mesh discovery, and GPS location.</p>
+                </div>
+
+                <div class="guide-step">
+                    <div class="step-number">2</div>
+                    <h4>Trigger Emergency SOS</h4>
+                    <p>Tap the big red <strong>"BHAI HELP"</strong> button. The app starts a loud siren, broadcasts 2.4GHz BLE beacons, and alerts nearby Bhai users instantly.</p>
+                </div>
+
+                <div class="guide-step">
+                    <div class="step-number">3</div>
+                    <h4>Coordinate via Chat & GPS</h4>
+                    <p>Responders receive high-priority alerts with alarm sound. Tap <strong>"I'M COMING"</strong>, navigate via Google Maps turn-by-turn route, and chat over Internet or BLE.</p>
+                </div>
+
+                <div class="guide-step">
+                    <div class="step-number">4</div>
+                    <h4>Stop SOS Cleanly</h4>
+                    <p>Press <strong>"STOP SOS"</strong> to immediately silence the siren, cancel live tracking, and return the app to a clean standby state ready for the next emergency.</p>
                 </div>
             </div>
         </section>
@@ -515,26 +602,26 @@
             <div class="download-card">
                 <div class="download-info">
                     <h3>Install Bhai App on Your Phone</h3>
-                    <p>Deploy directly to Android devices. Follow these simple steps to install the production APK:</p>
+                    <p>Download directly to your Android device over Wi-Fi or mobile data:</p>
                     <ol class="steps-list">
-                        <li>Tap <strong>Download Bhai App</strong> below to download the latest signed APK.</li>
-                        <li>Open the downloaded APK and tap <strong>Install</strong>. If prompted, toggle <em>Allow from this source</em>.</li>
-                        <li>Grant <strong>Location Services</strong> (Precise GPS) and <strong>Notification</strong> permissions on first launch.</li>
-                        <li>Your device is now armed and connected to the nearby emergency mesh!</li>
+                        <li>Tap <strong>Download APK Now</strong> below to download the latest signed APK.</li>
+                        <li>Open the downloaded APK and tap <strong>Install</strong>. (Toggle <em>Allow from this source</em> if prompted).</li>
+                        <li>Grant <strong>Notifications</strong>, <strong>Location</strong>, and <strong>Bluetooth</strong> on initial setup.</li>
+                        <li>Your phone is now guarded 24/7 against nearby emergencies!</li>
                     </ol>
-                    <a href="/download/bhai_app.apk" class="btn-download-primary" id="card-download-btn" download>
+                    <a href="/download-apk" class="btn-download-primary" id="card-download-btn">
                         <svg width="22" height="22" fill="currentColor" viewBox="0 0 24 24"><path d="M5,20H19V18H5M19,9H15V3H9V9H5L12,16L19,9Z"/></svg>
-                        Download APK Now
+                        Download Latest APK Now
                     </a>
                 </div>
 
                 <div class="qr-card">
-                    <div style="font-weight: 700; color: #38bdf8; margin-bottom: 0.8rem; font-size: 1.05rem;">
-                        📱 Scan to Install Instantly
+                    <div style="font-weight: 700; color: var(--primary); margin-bottom: 0.8rem; font-size: 1.1rem;">
+                        📱 Scan with Phone Camera
                     </div>
-                    <img id="qr-code-img" class="qr-image" src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=http://localhost:8000/download/bhai_app.apk" alt="Download QR Code">
-                    <div style="font-size: 0.85rem; color: #94a3b8;">
-                        Point your camera at the QR code to open the download directly on your phone.
+                    <img id="qr-code-img" class="qr-image" src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=http://10.140.120.82:8080/Bhai_App_Latest.apk" alt="Download QR Code">
+                    <div style="font-size: 0.88rem; color: #94a3b8;">
+                        Point your camera at this QR code to download directly on your phone.
                     </div>
                 </div>
             </div>
@@ -543,11 +630,15 @@
 
     <footer>
         <p>© 2026 BHAI App Assistance Network. Production Ready. Built for reliability, privacy, and speed.</p>
-        <p style="margin-top: 0.5rem;"><a href="/admin">Operator Admin Login</a> • <a href="/health">API Health Check</a></p>
+        <p style="margin-top: 0.5rem;">
+            <a href="/admin">Admin Command Center</a> • 
+            <a href="/docs">API Documentation</a> • 
+            <a href="/health">System Health</a> •
+            <a href="https://github.com/mahaveer19s/Bhai-App">GitHub Repository</a>
+        </p>
     </footer>
 
     <script>
-        // Dynamically fetch APK version metadata and configure download buttons
         async function loadVersionMetadata() {
             try {
                 const res = await fetch('/api/version');
@@ -556,16 +647,8 @@
                     if (data.version) document.getElementById('apk-version-val').textContent = 'v' + data.version;
                     if (data.size_mb) document.getElementById('apk-size-val').textContent = data.size_mb;
                     if (data.last_updated) document.getElementById('apk-date-val').textContent = data.last_updated;
-                    if (data.apk_url) {
-                        document.getElementById('hero-download-btn').href = data.apk_url;
-                        document.getElementById('card-download-btn').href = data.apk_url;
-                        const absoluteUrl = new URL(data.apk_url, window.location.origin).href;
-                        document.getElementById('qr-code-img').src = 'https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=' + encodeURIComponent(absoluteUrl);
-                    }
                 }
-            } catch (err) {
-                console.log('Version metadata fetch fallback:', err);
-            }
+            } catch (err) {}
         }
         window.addEventListener('DOMContentLoaded', loadVersionMetadata);
     </script>

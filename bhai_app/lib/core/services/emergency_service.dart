@@ -35,12 +35,18 @@ class NearbyEmergency {
     required this.triggeredAt,
     this.latitude,
     this.longitude,
+    this.accuracy,
+    this.senderId,
+    this.helperCount = 0,
   });
   final String id;
   final int distanceMeters;
   final DateTime triggeredAt;
   final double? latitude;
   final double? longitude;
+  final double? accuracy;
+  final String? senderId;
+  final int helperCount;
 
   factory NearbyEmergency.fromJson(Map<String, dynamic> json) => NearbyEmergency(
         id: json['id'].toString(),
@@ -48,6 +54,9 @@ class NearbyEmergency {
         triggeredAt: DateTime.tryParse(json['triggered_at']?.toString() ?? '')?.toLocal() ?? DateTime.now(),
         latitude: (json['latitude'] as num?)?.toDouble(),
         longitude: (json['longitude'] as num?)?.toDouble(),
+        accuracy: (json['accuracy'] as num?)?.toDouble(),
+        senderId: json['sender_id']?.toString(),
+        helperCount: (json['helper_count'] as num?)?.toInt() ?? 0,
       );
 }
 

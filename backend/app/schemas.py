@@ -117,6 +117,9 @@ class NearbyEmergencyOut(BaseModel):
     distance_meters: int
     sender_id: str | None = None
     helper_count: int = 0
+    latitude: float | None = None
+    longitude: float | None = None
+    accuracy: float | None = None
 
 
 class EmergencyResponseInput(BaseModel):

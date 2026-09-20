@@ -24,6 +24,13 @@ import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import java.util.Locale
 
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import androidx.core.app.NotificationCompat
+import android.media.RingtoneManager
+import android.media.AudioAttributes
 import android.media.AudioManager
 import android.media.ToneGenerator
 import android.os.Handler
@@ -47,9 +54,40 @@ class MainActivity : FlutterActivity() {
     private var advertiser: BluetoothLeAdvertiser? = null
     private var scanner: BluetoothLeScanner? = null
     private var eventSink: EventChannel.EventSink? = null
+    private var methodChannel: MethodChannel? = null
     private var currentAdvertiseCallback: AdvertiseCallback? = null
     private var isScanningActive = false
     private var currentMyDeviceId: String = ""
+    private val lastNativeAlertTimestamps = mutableMapOf<String, Long>()
+    private var launchNotificationPayload: Map<String, Any?>? = null
+
+    override fun onCreate(savedInstanceState: android.os.Bundle?) {
+        super.onCreate(savedInstanceState)
+        extractNotificationPayload(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        extractNotificationPayload(intent)
+        launchNotificationPayload?.let { payload ->
+            runOnUiThread {
+                methodChannel?.invokeMethod("onNotificationOpened", payload)
+            }
+        }
+    }
+
+    private fun extractNotificationPayload(intent: Intent?) {
+        if (intent == null) return
+        val route = intent.getStringExtra("route")
+        if (route != null) {
+            val payload = mutableMapOf<String, Any?>("route" to route)
+            intent.getStringExtra("emergency_id")?.let { payload["emergency_id"] = it }
+            intent.getStringExtra("conversation_id")?.let { payload["conversation_id"] = it }
+            intent.getStringExtra("sender_id")?.let { payload["sender_id"] = it }
+            launchNotificationPayload = payload
+        }
+    }
 
     // Native High-Intensity Siren Generator
     private var toneGenerator: ToneGenerator? = null
@@ -130,6 +168,10 @@ class MainActivity : FlutterActivity() {
                     longitude = lonInt / 100000.0
                 }
 
+                if (type == 2) {
+                    showNativeEmergencyAlert(senderId, result.rssi)
+                }
+
                 runOnUiThread {
                     eventSink?.success(
                         mapOf(
@@ -175,8 +217,9 @@ class MainActivity : FlutterActivity() {
                 }
             }
         )
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, methodChannelName)
-            .setMethodCallHandler { call, result -> handleBleCall(call, result) }
+        val channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, methodChannelName)
+        methodChannel = channel
+        channel.setMethodCallHandler { call, result -> handleBleCall(call, result) }
     }
 
     private fun handleBleCall(call: MethodCall, result: MethodChannel.Result) {
@@ -223,39 +266,93 @@ class MainActivity : FlutterActivity() {
             }
             "setMyDeviceId" -> {
                 currentMyDeviceId = call.argument<String>("deviceId") ?: ""
+                BhaiBleService.myDeviceId = currentMyDeviceId
                 result.success(true)
+            }
+            "getNotificationLaunchPayload" -> {
+                val payload = launchNotificationPayload
+                launchNotificationPayload = null
+                result.success(payload)
+            }
+            "requestIgnoreBatteryOptimizations" -> {
+                try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                        val pm = getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
+                        if (pm != null && !pm.isIgnoringBatteryOptimizations(packageName)) {
+                            val intent = Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                                data = Uri.parse("package:$packageName")
+                            }
+                            startActivity(intent)
+                        }
+                    }
+                    result.success(true)
+                } catch (e: Exception) {
+                    result.success(false)
+                }
+            }
+            "startBackgroundGuard" -> {
+                try {
+                    BhaiBleService.start(this)
+                    result.success(true)
+                } catch (e: Exception) {
+                    result.error("guard_failed", e.message, null)
+                }
+            }
+            "stopBackgroundGuard" -> {
+                try {
+                    BhaiBleService.stop(this)
+                    result.success(true)
+                } catch (e: Exception) {
+                    result.error("guard_failed", e.message, null)
+                }
             }
             "openGoogleMaps" -> {
                 val lat = call.argument<Double>("latitude") ?: 0.0
                 val lon = call.argument<Double>("longitude") ?: 0.0
+                if (lat == 0.0 && lon == 0.0) {
+                    result.error("INVALID_COORDINATES", "Coordinates not available (0.0, 0.0)", null)
+                    return
+                }
+                var launched = false
+                // 1. First attempt: Direct Google Maps Navigation turn-by-turn intent
                 try {
-                    val gmmIntentUri = Uri.parse("google.navigation:q=$lat,$lon")
+                    val gmmIntentUri = Uri.parse("google.navigation:q=$lat,$lon&mode=d")
                     val mapIntent = Intent(Intent.ACTION_VIEW, gmmIntentUri).apply {
                         setPackage("com.google.android.apps.maps")
                         flags = Intent.FLAG_ACTIVITY_NEW_TASK
                     }
-                    if (mapIntent.resolveActivity(packageManager) != null) {
-                        startActivity(mapIntent)
-                        result.success(true)
-                    } else {
-                        val webUri = Uri.parse("https://www.google.com/maps/dir/?api=1&destination=$lat,$lon")
-                        val browserIntent = Intent(Intent.ACTION_VIEW, webUri).apply {
+                    startActivity(mapIntent)
+                    launched = true
+                } catch (e1: Exception) {}
+
+                // 2. Second attempt: Generic geo URI (opens any installed map: Google Maps, OsmAnd, Maps.me, etc.)
+                if (!launched) {
+                    try {
+                        val geoUri = Uri.parse("geo:$lat,$lon?q=$lat,$lon(Bhai+Emergency+Location)")
+                        val geoIntent = Intent(Intent.ACTION_VIEW, geoUri).apply {
                             flags = Intent.FLAG_ACTIVITY_NEW_TASK
                         }
-                        startActivity(browserIntent)
-                        result.success(true)
-                    }
-                } catch (e: Exception) {
+                        startActivity(geoIntent)
+                        launched = true
+                    } catch (e2: Exception) {}
+                }
+
+                // 3. Third attempt: Web Browser Google Maps route
+                if (!launched) {
                     try {
                         val webUri = Uri.parse("https://www.google.com/maps/dir/?api=1&destination=$lat,$lon")
                         val browserIntent = Intent(Intent.ACTION_VIEW, webUri).apply {
                             flags = Intent.FLAG_ACTIVITY_NEW_TASK
                         }
                         startActivity(browserIntent)
-                        result.success(true)
-                    } catch (e2: Exception) {
-                        result.error("failed_to_open_maps", e2.message, null)
-                    }
+                        launched = true
+                    } catch (e3: Exception) {}
+                }
+
+                if (launched) {
+                    result.success(true)
+                } else {
+                    result.error("failed_to_open_maps", "Could not open map navigation", null)
                 }
             }
             "startEmergencySiren" -> {
@@ -286,6 +383,67 @@ class MainActivity : FlutterActivity() {
             }
             else -> result.notImplemented()
         }
+    }
+
+    private fun showNativeEmergencyAlert(senderId: String, rssi: Int) {
+        val now = System.currentTimeMillis()
+        val last = lastNativeAlertTimestamps[senderId] ?: 0L
+        if (now - last < 10000) return
+        lastNativeAlertTimestamps[senderId] = now
+
+        try {
+            val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+            val channelId = "bhai_emergency_high_priority"
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+                    ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+                val audioAttributes = AudioAttributes.Builder()
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .setUsage(AudioAttributes.USAGE_ALARM)
+                    .build()
+
+                val channel = NotificationChannel(
+                    channelId,
+                    "BHAI High-Priority Emergency Alerts",
+                    NotificationManager.IMPORTANCE_HIGH
+                ).apply {
+                    description = "Critical alerts when a nearby person triggers SOS"
+                    enableVibration(true)
+                    vibrationPattern = longArrayOf(0, 500, 200, 500, 200, 800)
+                    setSound(soundUri, audioAttributes)
+                    lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                }
+                notificationManager.createNotificationChannel(channel)
+            }
+
+            val launchIntent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            }
+            val pendingIntent = PendingIntent.getActivity(
+                this,
+                202,
+                launchIntent,
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+
+            val soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+                ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+
+            val builder = NotificationCompat.Builder(this, channelId)
+                .setSmallIcon(R.mipmap.ic_launcher)
+                .setContentTitle("🚨 EMERGENCY ALERT NEARBY")
+                .setContentText("A Bhai user ($senderId) needs immediate help! Tap to assist.")
+                .setPriority(NotificationCompat.PRIORITY_MAX)
+                .setCategory(NotificationCompat.CATEGORY_ALARM)
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                .setVibrate(longArrayOf(0, 500, 200, 500, 200, 800))
+                .setSound(soundUri)
+                .setContentIntent(pendingIntent)
+                .setFullScreenIntent(pendingIntent, true)
+                .setAutoCancel(true)
+
+            notificationManager.notify(202, builder.build())
+        } catch (e: Exception) {}
     }
 
     private fun bluetoothAdapter(): BluetoothAdapter? {
@@ -511,7 +669,7 @@ class MainActivity : FlutterActivity() {
             .build()
 
         val settings = ScanSettings.Builder()
-            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+            .setScanMode(ScanSettings.SCAN_MODE_BALANCED) // Low battery consumption for 24/7 background guard
             .setReportDelay(0)
             .build()
 
@@ -542,7 +700,7 @@ class MainActivity : FlutterActivity() {
 
     override fun onDestroy() {
         stopAdvertising()
-        stopScanning()
+        // Note: Do NOT stop BhaiBleService here so background emergency and push guard stay active when swiped from recents!
         super.onDestroy()
     }
 

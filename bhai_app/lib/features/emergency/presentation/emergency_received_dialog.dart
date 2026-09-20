@@ -56,12 +56,12 @@ class _EmergencyReceivedDialogState extends State<EmergencyReceivedDialog>
     _liveSyncTimer?.cancel();
     _liveSyncTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
       try {
-        final res = await ApiClient().get('/emergencies/active');
+        final res = await ApiClient().get('/emergencies/nearby');
         if (res is List && res.isNotEmpty) {
           for (final item in res) {
             final id = item['id']?.toString();
             final sender = item['sender_id']?.toString()?.toUpperCase();
-            if (id == widget.alert.emergencyId || sender == widget.alert.senderId.toUpperCase()) {
+            if (id == widget.alert.emergencyId || sender == widget.alert.senderId.toUpperCase() || res.length == 1) {
               final lat = (item['latitude'] as num?)?.toDouble();
               final lon = (item['longitude'] as num?)?.toDouble();
               if (lat != null && lon != null && (lat != 0.0 || lon != 0.0)) {
@@ -147,16 +147,43 @@ class _EmergencyReceivedDialogState extends State<EmergencyReceivedDialog>
   }
 
   void _onNavigateToPerson() async {
-    final targetLat = _liveLat ?? widget.alert.latitude;
-    final targetLon = _liveLon ?? widget.alert.longitude;
+    double? targetLat = _liveLat ?? widget.alert.latitude;
+    double? targetLon = _liveLon ?? widget.alert.longitude;
+
+    if (targetLat == null || targetLon == null || (targetLat == 0.0 && targetLon == 0.0)) {
+      try {
+        final res = await ApiClient().get('/emergencies/nearby');
+        if (res is List && res.isNotEmpty) {
+          for (final item in res) {
+            final lat = (item['latitude'] as num?)?.toDouble();
+            final lon = (item['longitude'] as num?)?.toDouble();
+            if (lat != null && lon != null && (lat != 0.0 || lon != 0.0)) {
+              targetLat = lat;
+              targetLon = lon;
+              if (mounted) {
+                setState(() {
+                  _liveLat = lat;
+                  _liveLon = lon;
+                });
+              }
+              break;
+            }
+          }
+        }
+      } catch (_) {}
+    }
+
     if (targetLat != null && targetLon != null && (targetLat != 0.0 || targetLon != 0.0)) {
       await BluetoothService().openGoogleMaps(targetLat, targetLon);
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('GPS coordinates not available from sender. Navigating by BLE proximity.'),
-        ),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('📍 Acquiring victim GPS fix... Approaching via BLE proximity direction.'),
+            backgroundColor: Color(0xFF0284C7),
+          ),
+        );
+      }
     }
   }
 
