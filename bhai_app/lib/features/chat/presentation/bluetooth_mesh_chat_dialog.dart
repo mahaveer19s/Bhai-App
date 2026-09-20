@@ -128,12 +128,12 @@ class _BluetoothMeshChatDialogState extends State<BluetoothMeshChatDialog> {
           color: const Color(0xFF0F172A),
           borderRadius: BorderRadius.circular(24),
           border: Border.all(
-            color: const Color(0xFF00BCD4).withValues(alpha: 0.4),
+            color: const Color(0xFF00BCD4).withOpacity(0.4),
             width: 1.5,
           ),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withValues(alpha: 0.6),
+              color: Colors.black.withOpacity(0.6),
               blurRadius: 30,
               offset: const Offset(0, 15),
             ),
@@ -153,7 +153,7 @@ class _BluetoothMeshChatDialogState extends State<BluetoothMeshChatDialog> {
                   Container(
                     padding: const EdgeInsets.all(8),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF00BCD4).withValues(alpha: 0.15),
+                      color: const Color(0xFF00BCD4).withOpacity(0.15),
                       shape: BoxShape.circle,
                     ),
                     child: const Icon(

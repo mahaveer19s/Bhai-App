@@ -116,7 +116,7 @@ class InternetTransport implements MessageTransport {
   }) async {
     final response = await ApiClient().post(
       '/chat/conversations/$conversationId/messages',
-      body: {
+      {
         'client_message_id': clientMessageId,
         'message': message,
         'transport': 'INTERNET',

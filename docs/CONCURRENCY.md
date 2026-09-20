@@ -1,17 +1,17 @@
-# BHAI Concurrency, Scalability & Load Testing Report
+# Bhai Concurrency & Idempotency Architecture
 
-## 1. Concurrency Model
-- **Asynchronous I/O**: FastAPI with `asyncio`, non-blocking SQLAlchemy 2.0 async engine, and `asyncpg` connection pool.
-- **Connection Isolation**: Separate connection pools for HTTP REST transactions, WebSocket streaming feeds, and PostGIS geospatial indexing.
-- **Idempotency Protection**: Every emergency creation and chat message carries client-generated UUID keys to prevent duplicates under packet loss or concurrent retries.
+## 1. Client Idempotency
+
+Every emergency activation and chat message generates a client-side unique identifier:
+- Emergency: `client_event_id` (UUID format).
+- Chat: `client_message_id` (`msg-{timestamp}-{deviceId}`).
+
+If the same operation is transmitted across dual transports (e.g. Internet and Bluetooth concurrently) or retried following connectivity restoration, the backend safely deduplicates the request and returns the existing resource without creating duplicate incident rows.
 
 ---
 
-## 2. Load Testing Results
+## 2. Asynchronous Queue Processing
 
-| Test Scenario | Concurrency Level | Throughput (Req/Sec) | Latency p50 | Latency p95 | Error Rate |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| Emergency Distress Creation | 100 concurrent users | 450 req/s | 12 ms | 28 ms | 0.00% |
-| 5-Second Live GPS Updates | 1,000 active streams | 1,850 req/s | 18 ms | 45 ms | 0.00% |
-| Emergency Chat Messages | 1,000 concurrent threads | 2,100 msg/s | 14 ms | 35 ms | 0.00% |
-| Geospatial Helper Discovery | 500 spatial queries | 820 req/s | 22 ms | 52 ms | 0.00% |
+- SQLite store-and-forward queue in Flutter client for operations created while offline.
+- Backend `AsyncEventBus` with non-blocking workers preventing slow third-party services (FCM push, SMS gateway) from blocking HTTP responses.
+- Independent, thread-safe live-location streams per active session.

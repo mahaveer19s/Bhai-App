@@ -82,7 +82,13 @@ class EmergencyService {
     await syncPending();
   }
 
-  Future<EmergencySnapshot> activate({bool isTest = false}) async {
+  Future<EmergencySnapshot> activate({bool isTest = false}) => activateFast(isTest: isTest);
+
+  /// Immediate fast-path SOS activation (<50ms local UI response).
+  /// Activates local emergency state, siren, and notifications instantly,
+  /// then executes GPS, BLE broadcasting, and internet syncing in parallel.
+  Future<EmergencySnapshot> activateFast({bool isTest = false}) async {
+    final clientSosTimestamp = DateTime.now().toUtc();
     if (isActive) {
       return EmergencySnapshot(
         localId: _storage.activeLocalEmergencyId ?? 'active',
@@ -90,33 +96,73 @@ class EmergencyService {
         isQueued: _storage.activeRemoteEmergencyId == null,
       );
     }
-    _stateMachine.transitionTo(EmergencyState.emergencyTriggered, reason: 'BHAI Button Triggered');
+
+    final localId = _id('bhai');
+    _stateMachine.transitionTo(EmergencyState.activeEmergency, reason: 'BHAI Button Activated (Fast Path)');
     try {
       HapticFeedback.heavyImpact();
     } catch (_) {}
 
-    _stateMachine.transitionTo(EmergencyState.locationAcquisition, reason: 'Requesting GPS Location');
-    final position = await _location.getBestAvailableLocation();
-    if (position == null) {
-      _stateMachine.transitionTo(EmergencyState.idle, reason: 'GPS Location Unavailable');
-      throw const LocationUnavailableException();
-    }
+    // Persist active state locally immediately
+    await _storage.setActiveEmergency(localId: localId);
 
-    _stateMachine.transitionTo(EmergencyState.localDiscovery, reason: 'Activating Local BLE Mesh Discovery');
-    final localId = _id('bhai');
+    // Start local audio siren & notification immediately without awaiting network/GPS
+    try {
+      AudioAlertService().startSiren();
+    } catch (_) {}
+    try {
+      NotificationService().showEmergencyActive();
+    } catch (_) {}
+
+    // Parallel Asynchronous Dispatch (Non-blocking)
+    unawaited(_executeParallelEmergencyDispatch(
+      localId: localId,
+      clientSosTimestamp: clientSosTimestamp,
+      isTest: isTest,
+    ));
+
+    return EmergencySnapshot(localId: localId, remoteId: null, isQueued: true);
+  }
+
+  Future<void> _executeParallelEmergencyDispatch({
+    required String localId,
+    required DateTime clientSosTimestamp,
+    required bool isTest,
+  }) async {
+    // 1. Start BLE emergency broadcast immediately with radio
+    try {
+      unawaited(_bluetooth.startEmergencyBroadcast(emergencyId: localId));
+    } catch (_) {}
+
+    // 2. Parallel GPS acquisition
+    Position? position;
+    try {
+      position = await _location.getBestAvailableLocation().timeout(const Duration(seconds: 4));
+    } catch (_) {}
+
+    // Update BLE broadcast with exact GPS coordinates if available
+    if (position != null) {
+      try {
+        unawaited(_bluetooth.startEmergencyBroadcast(
+          latitude: position.latitude,
+          longitude: position.longitude,
+          emergencyId: localId,
+        ));
+      } catch (_) {}
+    }
 
     final packet = EmergencyPacket(
       protocolVersion: 1,
       messageId: _id('msg'),
       emergencyId: localId,
       type: 'EMERGENCY',
-      createdAt: DateTime.now().toUtc().toIso8601String(),
-      expiresAt: DateTime.now().toUtc().add(const Duration(hours: 6)).toIso8601String(),
+      createdAt: clientSosTimestamp.toIso8601String(),
+      expiresAt: clientSosTimestamp.add(const Duration(hours: 6)).toIso8601String(),
       senderEphemeralId: _security.hashSha256(localId).substring(0, 12),
-      latitude: position.latitude,
-      longitude: position.longitude,
-      accuracy: position.accuracy,
-      locationSource: 'GPS',
+      latitude: position?.latitude ?? 0.0,
+      longitude: position?.longitude ?? 0.0,
+      accuracy: position?.accuracy ?? 0.0,
+      locationSource: position != null ? 'GPS' : 'NONE',
       locationTimestamp: DateTime.now().toUtc().toIso8601String(),
       severity: 'HIGH',
       hopCount: 0,
@@ -128,19 +174,23 @@ class EmergencyService {
 
     final payload = <String, dynamic>{
       'idempotency_key': localId,
-      'latitude': position.latitude,
-      'longitude': position.longitude,
-      'accuracy': position.accuracy,
-      'recorded_at': DateTime.now().toUtc().toIso8601String(),
+      'latitude': position?.latitude ?? 0.0,
+      'longitude': position?.longitude ?? 0.0,
+      'accuracy': position?.accuracy ?? 0.0,
+      'recorded_at': clientSosTimestamp.toIso8601String(),
       'network_status': 'ONLINE',
-      'device_status': {'source': 'mobile', 'offline_queue_enabled': true},
+      'device_status': {
+        'source': 'mobile_fast_path',
+        'sender_id': _bluetooth.myDeviceId,
+        'client_sos_timestamp': clientSosTimestamp.toIso8601String(),
+      },
       'is_test': isTest,
       'protocol_version': packet.protocolVersion,
       'hop_count': packet.hopCount,
       'max_hops': packet.maxHops,
     };
 
-    _stateMachine.transitionTo(EmergencyState.alertBroadcast, reason: 'Queueing Encrypted Local Packet');
+    // 3. Encrypted SQLite persistence
     try {
       await _database.queueEmergencyOperation(
         id: '$localId-create',
@@ -150,41 +200,24 @@ class EmergencyService {
       );
     } catch (_) {}
 
-    await _storage.setActiveEmergency(localId: localId);
-
-    try {
-      await _bluetooth.startSosAdvertising(_security.hashSha256(localId).substring(0, 16));
-    } catch (_) {}
-
-    try {
-      await AudioAlertService().startSiren();
-    } catch (_) {}
-
-    try {
-      await NotificationService().showEmergencyActive();
-    } catch (_) {}
-
+    // 4. Start 5-second location updates stream
     try {
       _startLocationUpdates(localId);
     } catch (_) {}
 
-    _stateMachine.transitionTo(EmergencyState.contactNotification, reason: 'Notifying Safety Circle & Servers');
-    String? remoteId;
+    // 5. Internet dispatch to backend API
     try {
       final response = await _api.post('/emergencies', payload) as Map<String, dynamic>;
-      remoteId = response['id'].toString();
+      final remoteId = response['id'].toString();
       try {
         await _database.markEmergencyOperationSynced('$localId-create', remoteEmergencyId: remoteId);
       } catch (_) {}
       await _storage.setRemoteEmergencyId(remoteId);
-      _stateMachine.transitionTo(EmergencyState.activeEmergency, reason: 'Server Sync Successful');
     } on ApiException {
-      _stateMachine.transitionTo(EmergencyState.activeEmergency, reason: 'Active in Offline Store-and-Forward Queue');
-    } catch (_) {
-      _stateMachine.transitionTo(EmergencyState.activeEmergency, reason: 'Active Locally');
-    }
-    return EmergencySnapshot(localId: localId, remoteId: remoteId, isQueued: remoteId == null);
+      // Retained in SQLite queue for automatic sync upon reconnection
+    } catch (_) {}
   }
+
 
   void _startLocationUpdates(String localEmergencyId) {
     if (kIsWeb) return;
@@ -344,21 +377,10 @@ class EmergencyService {
   Future<List<NearbyEmergency>> getNearbyEmergencies() async {
     try {
       final response = await _api.get('/emergencies/nearby') as List<dynamic>;
-      final list = response.map((item) => NearbyEmergency.fromJson(item as Map<String, dynamic>)).toList();
-      if (list.isNotEmpty) return list;
-    } catch (_) {}
-
-    // When an emergency is active or for testing nearby volunteer notifications
-    if (isActive || _storage.activeLocalEmergencyId != null) {
-      return [
-        NearbyEmergency(
-          id: activeEmergencyId ?? _storage.activeLocalEmergencyId ?? 'bhai-demo-sos',
-          distanceMeters: 145,
-          triggeredAt: DateTime.now().subtract(const Duration(minutes: 1)),
-        ),
-      ];
+      return response.map((item) => NearbyEmergency.fromJson(item as Map<String, dynamic>)).toList();
+    } catch (_) {
+      return const [];
     }
-    return const [];
   }
 
   Future<void> acknowledge(String emergencyId, {bool helping = false}) async {
@@ -371,8 +393,12 @@ class EmergencyService {
   }
 
   Future<int> responderCount(String emergencyId) async {
-    final response = await _api.get('/emergencies/$emergencyId/responders') as List<dynamic>;
-    return response.length;
+    try {
+      final response = await _api.get('/emergencies/$emergencyId/responders') as List<dynamic>;
+      return response.length;
+    } catch (_) {
+      return 0;
+    }
   }
 
   Future<void> openOfficialEmergencyDialer({String number = '112'}) async {
@@ -465,8 +491,19 @@ class EmergencyService {
   }
 
   Future<List<Map<String, dynamic>>> getNearbyUsers({double? latitude, double? longitude, int radius = 2000}) async {
-    final lat = latitude ?? _lastLivePosition?.latitude ?? 28.6273;
-    final lon = longitude ?? _lastLivePosition?.longitude ?? 77.3725;
+    double? lat = latitude ?? _lastLivePosition?.latitude;
+    double? lon = longitude ?? _lastLivePosition?.longitude;
+
+    if (lat == null || lon == null) {
+      final pos = await _location.getBestAvailableLocation();
+      if (pos != null) {
+        lat = pos.latitude;
+        lon = pos.longitude;
+      }
+    }
+
+    if (lat == null || lon == null) return [];
+
     try {
       final response = await _api.get('/api/nearby-users?latitude=$lat&longitude=$lon&radius_meters=$radius') as List<dynamic>;
       return response.map((e) => Map<String, dynamic>.from(e as Map)).toList();
@@ -474,5 +511,6 @@ class EmergencyService {
       return [];
     }
   }
+
 }
 

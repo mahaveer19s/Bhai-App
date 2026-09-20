@@ -134,117 +134,34 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       return;
     }
 
-    if (_isActivating) return;
-
-    // 1. Check Bluetooth state
-    final btEnabled = await _bluetooth.isBluetoothEnabled();
-    if (!btEnabled) {
-      setState(() {
-        _isBluetoothOn = false;
-        _statusMessage = 'Bluetooth is turned OFF. Please turn on Bluetooth to broadcast.';
-      });
-      await _bluetooth.requestEnableBluetooth();
-      return;
-    }
-
-    // 2. Check Permissions
-    final permGranted = await _bluetooth.hasPermissions();
-    if (!permGranted) {
-      final nowGranted = await _bluetooth.requestPermissions();
-      if (!nowGranted) {
-        setState(() {
-          _hasPermissions = false;
-          _statusMessage = 'Nearby Device / Location permissions are required for BLE.';
-        });
-        return;
-      }
-    }
-
+    // 1. Fast Path: Immediate Local UI State Update (<50ms)
     setState(() {
-      _isActivating = true;
-      _statusMessage = 'Acquiring GPS location & starting BLE emergency broadcast...';
-    });
-
-    // 3. Acquire Real GPS Location (High accuracy, 3s timeout to avoid delaying emergency)
-    Position? position;
-    try {
-      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (serviceEnabled) {
-        final perm = await Geolocator.checkPermission();
-        if (perm == LocationPermission.always || perm == LocationPermission.whileInUse) {
-          position = await Geolocator.getCurrentPosition(
-            locationSettings: const LocationSettings(
-              accuracy: LocationAccuracy.high,
-              timeLimit: Duration(seconds: 3),
-            ),
-          );
-        }
-      }
-    } catch (e) {
-      debugPrint('GPS acquisition: $e');
-    }
-
-    // 4. Generate Unique Emergency ID
-    final id = 'BHAI-${DateTime.now().millisecondsSinceEpoch % 1000000}-${_bluetooth.myDeviceId}';
-
-    // 5. Start Real Continuous BLE Emergency Advertisement & Sync
-    await _bluetooth.startEmergencyBroadcast(
-      latitude: position?.latitude,
-      longitude: position?.longitude,
-      emergencyId: id,
-    );
-
-    // 6. Trigger backend emergency alert if online
-    String? backendAlertId;
-    if (position != null) {
-      try {
-        final alertRes = await ApiClient().post('/api/emergency/alert', {
-          'idempotency_key': id,
-          'latitude': position.latitude,
-          'longitude': position.longitude,
-          'accuracy': position.accuracy,
-          'recorded_at': DateTime.now().toUtc().toIso8601String(),
-          'network_status': 'ONLINE',
-          'device_status': {'source': 'mobile_sos'},
-        });
-        if (alertRes is Map && alertRes['id'] != null) {
-          backendAlertId = alertRes['id'].toString();
-        }
-      } catch (e) {
-        debugPrint('Backend alert trigger error: $e');
-      }
-    }
-
-    // 7. Automatically start 5-second live location stream
-    String? liveSessionId;
-    try {
-      liveSessionId = await _emergencyService.startLiveLocationSharing();
-    } catch (e) {
-      debugPrint('Live location auto-start error: $e');
-    }
-
-    if (!mounted) return;
-
-    setState(() {
-      _isActivating = false;
       _isBroadcastingSos = true;
-      _isLiveLocationSharing = liveSessionId != null;
-      _liveSessionId = liveSessionId;
-      _currentPosition = position;
-      _emergencyId = backendAlertId ?? id;
+      _isActivating = false;
+      _isLiveLocationSharing = true;
       _statusMessage = '🚨 EMERGENCY BROADCAST ACTIVE • BLE + 5s Live Location Stream';
     });
+
+    try {
+      final snapshot = await _emergencyService.activateFast();
+      if (mounted) {
+        setState(() {
+          _emergencyId = snapshot.remoteId ?? snapshot.localId;
+        });
+      }
+    } catch (e) {
+      debugPrint('Fast SOS activation: $e');
+    }
   }
 
   Future<void> _stopEmergencyBroadcast() async {
     await _bluetooth.stopEmergencyBroadcast();
+    await _emergencyService.cancelEmergency(reason: 'STOPPED_BY_USER');
 
-    // Stop live location stream if active
     if (_isLiveLocationSharing) {
       await _emergencyService.stopLiveLocationSharing();
     }
 
-    // Resolve specific emergency on backend without resetting other users
     if (_emergencyId != null) {
       try {
         await ApiClient().post('/api/emergency/$_emergencyId/resolve', {'reason': 'RESOLVED_BY_USER'});
@@ -334,16 +251,68 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     setState(() {
       _isLoadingNearby = true;
     });
+
     try {
-      final users = await _emergencyService.getNearbyUsers(
+      // 1. Concurrently trigger BLE scanning & GPS backend discovery
+      _bluetooth.startScanning();
+      final gpsUsersFuture = _emergencyService.getNearbyUsers(
         latitude: _currentPosition?.latitude,
         longitude: _currentPosition?.longitude,
       );
+
+      // Discovery window for BLE peers
+      await Future.delayed(const Duration(milliseconds: 1200));
+      final gpsUsers = await gpsUsersFuture;
+
+      // 2. Merge and deduplicate GPS and BLE results
+      final Map<String, Map<String, dynamic>> unified = {};
+
+      for (final u in gpsUsers) {
+        final uid = (u['user_id']?.toString() ?? '').trim().toUpperCase();
+        if (uid.isEmpty) continue;
+        unified[uid] = {
+          'id': uid,
+          'displayName': u['display_name'] ?? 'Bhai User ${uid.substring(0, uid.length.clamp(0, 6))}',
+          'distanceMeters': (u['distance_meters'] as num?)?.round(),
+          'latitude': (u['latitude'] as num?)?.toDouble(),
+          'longitude': (u['longitude'] as num?)?.toDouble(),
+          'isGps': true,
+          'isBle': false,
+          'bleProximity': null,
+          'bleRssi': null,
+        };
+      }
+
+      // Merge active BLE peers
+      final bleDevice = await _bluetooth.findNearestBhai(timeout: const Duration(milliseconds: 1500));
+      if (bleDevice != null) {
+        final bid = bleDevice.deviceId.toUpperCase();
+        if (unified.containsKey(bid)) {
+          unified[bid]!['isBle'] = true;
+          unified[bid]!['bleProximity'] = bleDevice.proximity;
+          unified[bid]!['bleRssi'] = bleDevice.rssi;
+        } else {
+          unified[bid] = {
+            'id': bid,
+            'displayName': 'Bhai Peer $bid',
+            'distanceMeters': null,
+            'latitude': null,
+            'longitude': null,
+            'isGps': false,
+            'isBle': true,
+            'bleProximity': bleDevice.proximity,
+            'bleRssi': bleDevice.rssi,
+          };
+        }
+      }
+
+      final resultsList = unified.values.toList();
+
       if (!mounted) return;
       setState(() {
         _isLoadingNearby = false;
       });
-      _showNearbyUsersSheet(users);
+      _showNearbyUsersSheet(resultsList);
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -351,7 +320,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Error finding nearby users: $e'),
+          content: Text('Error scanning for nearby users: $e'),
           backgroundColor: Colors.redAccent,
         ),
       );
@@ -362,6 +331,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: const Color(0xFF0F172A),
+      isScrollControlled: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
@@ -398,15 +368,16 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               const SizedBox(height: 12),
               if (users.isEmpty) ...[
                 Container(
-                  padding: const EdgeInsets.all(20),
+                  padding: const EdgeInsets.all(24),
                   alignment: Alignment.center,
                   child: const Column(
                     children: [
                       Icon(Icons.person_search, color: Colors.grey, size: 48),
-                      SizedBox(height: 8),
+                      SizedBox(height: 10),
                       Text(
-                        'No active Bhai users found within 2.0 km radius.',
-                        style: TextStyle(color: Colors.grey, fontSize: 13),
+                        'No active Bhai users detected nearby via GPS or Bluetooth.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: Colors.grey, fontSize: 14),
                       ),
                     ],
                   ),
@@ -419,41 +390,100 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     separatorBuilder: (_, __) => const Divider(color: Colors.white10),
                     itemBuilder: (context, idx) {
                       final u = users[idx];
-                      final distance = (u['distance_meters'] as num?)?.round() ?? 0;
-                      final uLat = (u['latitude'] as num?)?.toDouble() ?? 0.0;
-                      final uLon = (u['longitude'] as num?)?.toDouble() ?? 0.0;
-                      final id = u['user_id']?.toString().substring(0, 8) ?? 'Unknown';
-                      return ListTile(
-                        leading: CircleAvatar(
-                          backgroundColor: Colors.cyanAccent.withOpacity(0.15),
-                          child: const Icon(Icons.person_pin_circle, color: Colors.cyanAccent),
-                        ),
-                        title: Text(
-                          'Bhai User $id',
-                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
-                        ),
-                        subtitle: Text(
-                          '${distance}m away • ${uLat.toStringAsFixed(4)}, ${uLon.toStringAsFixed(4)}',
-                          style: const TextStyle(color: Colors.white60, fontSize: 12),
-                        ),
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
+                      final id = u['id']?.toString() ?? 'User';
+                      final name = u['displayName']?.toString() ?? 'Bhai User';
+                      final dist = u['distanceMeters'] as int?;
+                      final isGps = u['isGps'] == true;
+                      final isBle = u['isBle'] == true;
+                      final uLat = u['latitude'] as double?;
+                      final uLon = u['longitude'] as double?;
+
+                      String transportBadge;
+                      Color badgeColor;
+                      if (isGps && isBle) {
+                        transportBadge = '🌐 + 📡 Dual';
+                        badgeColor = Colors.cyanAccent;
+                      } else if (isGps) {
+                        transportBadge = '🌐 GPS';
+                        badgeColor = Colors.blueAccent;
+                      } else {
+                        transportBadge = '📡 Bluetooth Direct';
+                        badgeColor = Colors.greenAccent;
+                      }
+
+                      String distanceText;
+                      if (dist != null) {
+                        distanceText = dist < 1000 ? '${dist}m away' : '${(dist / 1000).toStringAsFixed(1)}km away';
+                      } else if (u['bleProximity'] != null) {
+                        distanceText = u['bleProximity'].toString();
+                      } else {
+                        distanceText = 'Nearby';
+                      }
+
+                      return Container(
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        child: Row(
                           children: [
+                            CircleAvatar(
+                              radius: 22,
+                              backgroundColor: badgeColor.withOpacity(0.15),
+                              child: Icon(Icons.person_pin_circle, color: badgeColor),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    name,
+                                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Row(
+                                    children: [
+                                      Text(
+                                        distanceText,
+                                        style: const TextStyle(color: Colors.white70, fontSize: 12),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                                        decoration: BoxDecoration(
+                                          color: badgeColor.withOpacity(0.15),
+                                          borderRadius: BorderRadius.circular(6),
+                                          border: Border.all(color: badgeColor.withOpacity(0.4)),
+                                        ),
+                                        child: Text(
+                                          transportBadge,
+                                          style: TextStyle(color: badgeColor, fontSize: 10, fontWeight: FontWeight.bold),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
+                            // Action buttons: Chat, Navigate, I'm Coming
                             IconButton(
-                              icon: const Icon(Icons.directions, color: Colors.greenAccent),
-                              tooltip: 'Navigate',
+                              icon: const Icon(Icons.chat, color: Colors.cyanAccent, size: 20),
+                              tooltip: 'Chat with User',
                               onPressed: () {
                                 Navigator.pop(ctx);
-                                _openNavigation(uLat, uLon);
+                                showDialog<void>(
+                                  context: context,
+                                  builder: (_) => BluetoothMeshChatDialog(helperId: id),
+                                );
                               },
                             ),
-                            IconButton(
-                              icon: const Icon(Icons.share, color: Colors.cyanAccent),
-                              tooltip: 'Share',
-                              onPressed: () {
-                                _shareLocationLink(uLat, uLon);
-                              },
-                            ),
+                            if (uLat != null && uLon != null)
+                              IconButton(
+                                icon: const Icon(Icons.directions, color: Colors.greenAccent, size: 20),
+                                tooltip: 'Navigate',
+                                onPressed: () {
+                                  Navigator.pop(ctx);
+                                  _openNavigation(uLat, uLon);
+                                },
+                              ),
                           ],
                         ),
                       );
@@ -467,6 +497,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       ),
     );
   }
+
 
   void _confirmStopBroadcast() {
     showDialog<void>(
@@ -1200,9 +1231,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         ),
       ],
     );
-  }
-
-
   }
 
   Widget _actionTile({

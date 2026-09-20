@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -100,6 +101,9 @@ class BluetoothService {
       StreamController<BhaiEmergencyAlert>.broadcast();
   final StreamController<String> _ackReceivedController =
       StreamController<String>.broadcast();
+  final StreamController<Map<String, dynamic>> _bleChatController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  final Map<String, Map<int, String>> _incomingMessageChunks = {};
 
   bool _isAdvertising = false;
   bool _isScanning = false;
@@ -108,6 +112,8 @@ class BluetoothService {
   Stream<List<BhaiNearbyDevice>> get nearbyDevicesStream => _nearbyDevicesController.stream;
   Stream<BhaiEmergencyAlert> get incomingAlertsStream => _incomingAlertController.stream;
   Stream<String> get ackReceivedStream => _ackReceivedController.stream;
+  Stream<Map<String, dynamic>> get incomingBleChatStream => _bleChatController.stream;
+
 
   String get myDeviceId => LocalStorage().getOrGenerateBhaiDeviceId();
   bool get isAdvertising => _isAdvertising;
@@ -650,22 +656,48 @@ class BluetoothService {
     } catch (_) {}
   }
 
-  /// Broadcast a direct emergency chat message over BLE mesh radio.
-  Future<void> broadcastChatMessage({required String text, String targetId = 'FFFFFFFF'}) async {
+  /// Broadcast a direct emergency chat message over BLE mesh radio with chunking support.
+  Future<void> broadcastChatMessage({required String text, String targetId = 'FFFFFFFF', int? messageId}) async {
     if (kIsWeb) return;
+    final cleanTarget = targetId.replaceAll('-', '').trim().toUpperCase();
+    final effectiveTarget = cleanTarget.isEmpty ? 'FFFFFFFF' : cleanTarget;
+    final msgId = messageId ?? (DateTime.now().millisecondsSinceEpoch % 65535);
+
+    final utf8Bytes = utf8.encode(text);
+    const chunkSize = 10;
+    final totalChunks = (utf8Bytes.length / chunkSize).ceil().clamp(1, 15);
+
     try {
       await stopAdvertising();
-      await startAdvertising(
-        type: typeChatMessage,
-        targetId: targetId,
-      );
-      // Revert to presence advertising after 3 seconds
-      Future.delayed(const Duration(seconds: 3), () {
+      for (int i = 0; i < totalChunks; i++) {
+        final start = i * chunkSize;
+        final end = (start + chunkSize).clamp(0, utf8Bytes.length);
+        final chunkString = utf8.decode(utf8Bytes.sublist(start, end));
+
+        await _channel.invokeMethod<void>('startAdvertising', {
+          'type': typeChatMessage,
+          'senderId': myDeviceId,
+          'targetId': effectiveTarget,
+          'chatText': chunkString,
+          'messageId': msgId,
+          'chunkIndex': i,
+          'totalChunks': totalChunks,
+        });
+
+        if (totalChunks > 1) {
+          await Future.delayed(const Duration(milliseconds: 180));
+        }
+      }
+
+      // Revert to presence advertising after transmitting message bursts
+      Future.delayed(const Duration(milliseconds: 2500), () {
         if (_isAdvertising && _currentAdvertisingType == typeChatMessage) {
           startPresenceAdvertising();
         }
       });
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[BLE Chat Broadcast] Error: $e');
+    }
   }
 
   /// Sets up the native EventChannel listener.
@@ -744,8 +776,32 @@ class BluetoothService {
             }
           } else if (type == typeChatMessage) {
             final chatText = (map['chatText'] as String? ?? '').trim();
+            final messageId = map['messageId'] as int? ?? 0;
+            final chunkIndex = map['chunkIndex'] as int? ?? 0;
+            final totalChunks = (map['totalChunks'] as int? ?? 1).clamp(1, 15);
+            final msgKey = '$senderId-$messageId';
+
+            _incomingMessageChunks.putIfAbsent(msgKey, () => {});
             if (chatText.isNotEmpty) {
-              debugPrint('[BLE Chat Received] From $senderId: $chatText');
+              _incomingMessageChunks[msgKey]![chunkIndex] = chatText;
+            }
+
+            // Check if all chunks received
+            if (_incomingMessageChunks[msgKey]!.length >= totalChunks || totalChunks <= 1) {
+              final sortedChunks = _incomingMessageChunks[msgKey]!.entries.toList()
+                ..sort((a, b) => a.key.compareTo(b.key));
+              final fullText = sortedChunks.map((e) => e.value).join();
+              _incomingMessageChunks.remove(msgKey);
+
+              if (fullText.isNotEmpty) {
+                _bleChatController.add({
+                  'senderId': senderId,
+                  'targetId': targetId,
+                  'message': fullText,
+                  'messageId': msgKey,
+                  'receivedAt': now,
+                });
+              }
             }
           }
         } catch (e) {
@@ -771,5 +827,7 @@ class BluetoothService {
     _nearbyDevicesController.close();
     _incomingAlertController.close();
     _ackReceivedController.close();
+    _bleChatController.close();
   }
+
 }

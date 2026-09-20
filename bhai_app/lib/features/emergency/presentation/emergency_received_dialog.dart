@@ -86,7 +86,7 @@ class _EmergencyReceivedDialogState extends State<EmergencyReceivedDialog>
       final pos = await Geolocator.getLastKnownPosition();
       await ApiClient().post(
         '/emergencies/${widget.alert.emergencyId}/respond',
-        body: {
+        {
           'response_type': 'REACHED',
           if (pos != null) 'latitude': pos.latitude,
           if (pos != null) 'longitude': pos.longitude,

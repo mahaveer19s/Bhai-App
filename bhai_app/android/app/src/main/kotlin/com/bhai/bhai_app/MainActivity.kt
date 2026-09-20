@@ -96,13 +96,27 @@ class MainActivity : FlutterActivity() {
                 var latitude: Double? = null
                 var longitude: Double? = null
                 var chatText: String? = null
+                var messageId: Int = 0
+                var chunkIndex: Int = 0
+                var totalChunks: Int = 1
                 val hasLocation = rawBytes.size >= 22 && rawBytes[21].toInt() == 1
 
-                if (type == 4 && rawBytes.size >= 21) {
-                    // Type 4: Direct Chat / Safety Status message payload
-                    val textBytes = ByteArray(8)
-                    System.arraycopy(rawBytes, 13, textBytes, 0, 8)
-                    chatText = String(textBytes, Charsets.UTF_8).trimEnd('\u0000', ' ')
+                if (type == 4 && rawBytes.size >= 17) {
+                    // Type 4: Direct BLE Framed Chat message payload
+                    messageId = if (rawBytes.size >= 15) {
+                        ((rawBytes[13].toInt() and 0xFF) shl 8) or (rawBytes[14].toInt() and 0xFF)
+                    } else 0
+                    val chunkInfo = if (rawBytes.size >= 16) rawBytes[15].toInt() and 0xFF else 0
+                    chunkIndex = (chunkInfo shr 4) and 0x0F
+                    totalChunks = chunkInfo and 0x0F
+                    if (totalChunks == 0) totalChunks = 1
+
+                    val textLen = (rawBytes.size - 17).coerceAtLeast(0).coerceAtMost(10)
+                    if (textLen > 0) {
+                        val textBytes = ByteArray(textLen)
+                        System.arraycopy(rawBytes, 16, textBytes, 0, textLen)
+                        chatText = String(textBytes, Charsets.UTF_8).trimEnd('\u0000', ' ')
+                    }
                 } else if (hasLocation && rawBytes.size >= 21) {
                     val latInt = (rawBytes[13].toInt() shl 24) or
                                  ((rawBytes[14].toInt() and 0xFF) shl 16) or
@@ -127,6 +141,9 @@ class MainActivity : FlutterActivity() {
                             "longitude" to longitude,
                             "hasLocation" to hasLocation,
                             "chatText" to chatText,
+                            "messageId" to messageId,
+                            "chunkIndex" to chunkIndex,
+                            "totalChunks" to totalChunks,
                             "detectedAt" to System.currentTimeMillis()
                         )
                     )
@@ -184,7 +201,11 @@ class MainActivity : FlutterActivity() {
                 val latitude = call.argument<Double>("latitude") ?: 0.0
                 val longitude = call.argument<Double>("longitude") ?: 0.0
                 val hasLocation = call.argument<Boolean>("hasLocation") ?: false
-                startAdvertising(type, senderId, targetId, latitude, longitude, hasLocation, result)
+                val chatText = call.argument<String>("chatText")
+                val messageId = call.argument<Int>("messageId") ?: 0
+                val chunkIndex = call.argument<Int>("chunkIndex") ?: 0
+                val totalChunks = call.argument<Int>("totalChunks") ?: 1
+                startAdvertising(type, senderId, targetId, latitude, longitude, hasLocation, chatText, messageId, chunkIndex, totalChunks, result)
             }
             "stopAdvertising" -> {
                 stopAdvertising()
@@ -236,6 +257,7 @@ class MainActivity : FlutterActivity() {
                         result.error("failed_to_open_maps", e2.message, null)
                     }
                 }
+            }
             "startEmergencySiren" -> {
                 try {
                     if (!isSirenPlaying) {
@@ -289,8 +311,44 @@ class MainActivity : FlutterActivity() {
         targetId: String,
         latitude: Double,
         longitude: Double,
-        hasLocation: Boolean
+        hasLocation: Boolean,
+        chatText: String?,
+        messageId: Int,
+        chunkIndex: Int,
+        totalChunks: Int
     ): ByteArray {
+        if (type == 4) {
+            // Type 4: Direct BLE Framed Chat packet
+            val textBytes = (chatText ?: "").toByteArray(Charsets.UTF_8)
+            val chunkLen = textBytes.size.coerceAtMost(10)
+            val payload = ByteArray(17 + chunkLen)
+            payload[0] = 'B'.code.toByte()
+            payload[1] = 'H'.code.toByte()
+            payload[2] = 'A'.code.toByte()
+            payload[3] = 'I'.code.toByte()
+            payload[4] = 0x04.toByte()
+
+            val senderBytes = hexToBytes(senderId, 4)
+            System.arraycopy(senderBytes, 0, payload, 5, 4)
+
+            val targetBytes = hexToBytes(targetId, 4)
+            System.arraycopy(targetBytes, 0, payload, 9, 4)
+
+            // Message ID (2 bytes)
+            payload[13] = ((messageId shr 8) and 0xFF).toByte()
+            payload[14] = (messageId and 0xFF).toByte()
+
+            // Chunk info: upper 4 bits = chunkIndex, lower 4 bits = totalChunks
+            val chunkByte = ((chunkIndex and 0x0F) shl 4) or (totalChunks and 0x0F)
+            payload[15] = chunkByte.toByte()
+
+            if (chunkLen > 0) {
+                System.arraycopy(textBytes, 0, payload, 16, chunkLen)
+            }
+            payload[16 + chunkLen] = (System.currentTimeMillis() and 0xFF).toByte()
+            return payload
+        }
+
         val payload = ByteArray(23)
         // Magic "BHAI" (4 bytes)
         payload[0] = 'B'.code.toByte()
@@ -340,6 +398,10 @@ class MainActivity : FlutterActivity() {
         latitude: Double,
         longitude: Double,
         hasLocation: Boolean,
+        chatText: String? = null,
+        messageId: Int = 0,
+        chunkIndex: Int = 0,
+        totalChunks: Int = 1,
         result: MethodChannel.Result
     ) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
@@ -368,8 +430,9 @@ class MainActivity : FlutterActivity() {
             return
         }
 
-        val payload = encodeBhaiPayload(type, senderId, targetId, latitude, longitude, hasLocation)
+        val payload = encodeBhaiPayload(type, senderId, targetId, latitude, longitude, hasLocation, chatText, messageId, chunkIndex, totalChunks)
         val settings = AdvertiseSettings.Builder()
+
             .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
             .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
             .setConnectable(false)

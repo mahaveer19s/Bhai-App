@@ -50,10 +50,33 @@ class ChatService {
   final Map<String, StreamController<List<ChatMessageModel>>> _controllers = {};
   final List<ChatMessageModel> _offlineQueue = [];
   Timer? _queueProcessorTimer;
+  StreamSubscription? _bleChatSubscription;
 
   void initialize() {
     _startQueueProcessor();
+    _bleChatSubscription?.cancel();
+    _bleChatSubscription = BluetoothService().incomingBleChatStream.listen((data) {
+      final senderId = data['senderId']?.toString() ?? 'UNKNOWN';
+      final text = data['message']?.toString() ?? '';
+      final msgKey = data['messageId']?.toString() ?? '';
+      final convId = 'ble-peer-$senderId';
+
+      final msg = ChatMessageModel(
+        id: msgKey.isNotEmpty ? msgKey : 'ble-$senderId-${DateTime.now().millisecondsSinceEpoch}',
+        conversationId: convId,
+        clientMessageId: msgKey,
+        senderId: senderId,
+        receiverId: LocalStorage().getOrGenerateBhaiDeviceId(),
+        message: text,
+        transport: 'BLUETOOTH',
+        deliveryStatus: 'DELIVERED',
+        createdAt: (data['receivedAt'] as DateTime?) ?? DateTime.now(),
+      );
+
+      ingestIncomingMessage(convId, msg);
+    });
   }
+
 
   /// Get or create a stream for a specific conversation.
   Stream<List<ChatMessageModel>> getMessagesStream(String conversationId) {
@@ -79,7 +102,7 @@ class ChatService {
       if (isOnline) {
         final response = await ApiClient().post(
           '/chat/conversations',
-          body: {
+          {
             'alert_id': alertId,
             if (helperUserId != null) 'helper_user_id': helperUserId,
             'is_admin_thread': isAdminThread,

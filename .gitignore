@@ -52,8 +52,10 @@ backend/pb_data/
 **/android/captures/
 **/android/local.properties
 **/android/app/release/
+*.apk
 backend/*.apk
 backend/app/static/*.apk
+*.spec
 
 # Logs & Temporary Files
 logs/

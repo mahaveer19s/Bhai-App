@@ -176,6 +176,9 @@ async def register_device(
         pass
 
 
+from app.services.event_bus import event_bus
+
+
 @router.post("/emergencies", response_model=EmergencyOut, status_code=status.HTTP_201_CREATED)
 @router.post("/api/emergencies", response_model=EmergencyOut, status_code=status.HTTP_201_CREATED)
 @router.post("/api/emergency/alert", response_model=EmergencyOut, status_code=status.HTTP_201_CREATED)
@@ -183,6 +186,7 @@ async def register_device(
 async def create_emergency(
     request: Request, payload: EmergencyCreate, user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)
 ) -> EmergencyOut:
+    server_received_at = datetime.now(UTC)
     sender_id = (payload.device_status or {}).get("sender_id", str(user.id))
     try:
         existing = await session.scalar(
@@ -202,7 +206,6 @@ async def create_emergency(
         for e in IN_MEMORY_EMERGENCIES:
             if e.get("user_id") == user.id and e.get("status") == EmergencyStatus.ACTIVE.value:
                 return EmergencyOut(**e)
-
 
     emergency_id = uuid4()
     recorded_at = utc(payload.recorded_at)
@@ -250,6 +253,7 @@ async def create_emergency(
     }
     IN_MEMORY_EMERGENCIES.insert(0, mem_record)
 
+    helpers: list[UUID] = []
     try:
         session.add(emergency)
         await session.flush()
@@ -271,10 +275,6 @@ async def create_emergency(
             )
         )
 
-        from app.services.dispatcher import EmergencyDispatcher
-        dispatcher = EmergencyDispatcher()
-        await dispatcher.process_emergency(session, emergency)
-
         helpers = await nearby_helper_ids(session, payload.latitude, payload.longitude, user.id)
         helper_notifications = [
             EmergencyNotification(
@@ -287,18 +287,19 @@ async def create_emergency(
         ]
         session.add_all(helper_notifications)
         await session.commit()
-
-        for notification in helper_notifications:
-            await send_helper_alert(session, notification)
-        await session.commit()
         await session.refresh(emergency)
+
+        from app.services.dispatcher import EmergencyDispatcher
+        dispatcher = EmergencyDispatcher()
+        asyncio.create_task(dispatcher.process_emergency(session, emergency))
     except Exception:
         pass
 
-    # Broadcast emergency alert to central admin WebSocket
+    # Broadcast emergency alert immediately to central admin WebSocket
     broadcast_alert = {
         "id": str(emergency_id),
         "user_id": str(user.id),
+        "sender_id": sender_id,
         "status": EmergencyStatus.ACTIVE.value,
         "initial_latitude": payload.latitude,
         "initial_longitude": payload.longitude,
@@ -307,10 +308,19 @@ async def create_emergency(
         "accuracy": payload.accuracy or 10.0,
         "navigation_url": f"https://www.google.com/maps/dir/?api=1&destination={payload.latitude},{payload.longitude}",
         "triggered_at": recorded_at.isoformat(),
+        "server_received_at": server_received_at.isoformat(),
     }
     await emergency_connections.broadcast_to_admin("emergency_created", broadcast_alert)
 
+    # Real-time push to all nearby online helpers
+    if helpers:
+        await emergency_connections.broadcast_to_users(helpers, "emergency_created", broadcast_alert)
+
+    # Publish to asynchronous decoupled Event Bus
+    await event_bus.publish("emergency.created", broadcast_alert)
+
     return EmergencyOut(**mem_record)
+
 
 
 @router.get("/nearby-users", response_model=list[NearbyUserOut])
@@ -414,26 +424,36 @@ async def get_nearby_users(
 
 @router.get("/emergencies/nearby", response_model=list[NearbyEmergencyOut])
 @router.get("/api/emergencies/nearby", response_model=list[NearbyEmergencyOut])
-
 async def nearby_emergencies(
     user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)
 ) -> list[NearbyEmergencyOut]:
+    helper_presence = IN_MEMORY_PRESENCES.get(str(user.id))
+    helper_lat = helper_presence.get("latitude") if helper_presence else None
+    helper_lon = helper_presence.get("longitude") if helper_presence else None
+
     results = []
     for e in IN_MEMORY_EMERGENCIES:
-        if e.get("status") == EmergencyStatus.ACTIVE.value:
+        if e.get("status") == EmergencyStatus.ACTIVE.value and str(e.get("user_id")) != str(user.id):
             acks = len([r for r in IN_MEMORY_RESPONSES if str(r.get("emergency_id")) == str(e["id"])])
+            dist = 0
+            if helper_lat is not None and helper_lon is not None and e.get("last_latitude") is not None and e.get("last_longitude") is not None:
+                dist = haversine_meters(helper_lat, helper_lon, e["last_latitude"], e["last_longitude"])
+            elif e.get("last_latitude") is not None and e.get("last_longitude") is not None:
+                dist = 50  # Default initial estimate when presence lat/lon not yet registered
             results.append(
                 NearbyEmergencyOut(
                     id=e["id"],
                     status=EmergencyStatus.ACTIVE.value,
-                    distance_meters=15,
+                    distance_meters=dist,
                     triggered_at=e["triggered_at"],
                     sender_id=e.get("sender_id", str(e.get("user_id", ""))),
                     helper_count=acks,
                 )
             )
     if results:
+        results.sort(key=lambda x: x.distance_meters)
         return results
+
 
     try:
         presence = await session.get(HelperPresence, user.id)

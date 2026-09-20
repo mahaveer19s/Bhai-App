@@ -27,8 +27,12 @@ logger = logging.getLogger("bhai.api")
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
+from app.services.event_bus import event_bus
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    event_bus.start()
     try:
         async with engine.begin() as connection:
             await connection.execute(text("CREATE EXTENSION IF NOT EXISTS postgis"))
@@ -43,10 +47,12 @@ async def lifespan(_: FastAPI):
             exc,
         )
     yield
+    await event_bus.stop()
     try:
         await engine.dispose()
     except Exception:
         pass
+
 
 
 app = FastAPI(
@@ -226,8 +232,30 @@ async def chat_socket(websocket: WebSocket, conversation_id: UUID, token: str) -
         chat_connections.disconnect(conversation_id, websocket)
 
 
+@app.websocket("/ws/user")
+@app.websocket("/ws/alerts")
+async def user_alerts_socket(websocket: WebSocket, token: str) -> None:
+    """Real-time personal push alerts and notifications for active Bhai users."""
+    async with SessionLocal() as session:
+        user = await get_user_from_token(token, session)
+        if not user:
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+        user_id = user.id
+
+    await emergency_connections.connect_user(user_id, websocket)
+    await chat_connections.connect_user(user_id, websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        emergency_connections.disconnect_user(user_id, websocket)
+        chat_connections.disconnect_user(user_id, websocket)
+
+
 # Static File Mounting
 if STATIC_DIR.exists():
+
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 FLUTTER_WEB_DIR = Path(__file__).resolve().parents[2] / "bhai_app" / "build" / "web"

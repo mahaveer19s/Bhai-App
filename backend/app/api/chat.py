@@ -253,6 +253,8 @@ async def send_message(
             msg_out = ChatMessageOut.model_validate(msg)
             msg_dict = msg_out.model_dump(mode="json")
             await chat_connections.broadcast(conversation_id, "new_message", msg_dict)
+            if receiver_id:
+                await chat_connections.send_to_user(receiver_id, "new_message", msg_dict)
             await emergency_connections.broadcast(conversation.alert_id, "chat_message", msg_dict)
             await emergency_connections.broadcast_to_admin("chat_message", msg_dict)
             return msg_out
@@ -298,9 +300,16 @@ async def send_message(
     msg_out = ChatMessageOut(**mem_msg)
     msg_dict = msg_out.model_dump(mode="json")
     await chat_connections.broadcast(conversation_id, "new_message", msg_dict)
+    if receiver_id:
+        try:
+            from uuid import UUID as _UUID
+            await chat_connections.send_to_user(_UUID(str(receiver_id)), "new_message", msg_dict)
+        except Exception:
+            pass
     await emergency_connections.broadcast(mem_c["alert_id"], "chat_message", msg_dict)
     await emergency_connections.broadcast_to_admin("chat_message", msg_dict)
     return msg_out
+
 
 
 @router.post("/messages/{message_id}/status", response_model=ChatMessageOut)
