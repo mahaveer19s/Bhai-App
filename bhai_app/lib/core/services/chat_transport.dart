@@ -111,12 +111,14 @@ class InternetTransport implements MessageTransport {
     String clientMessageId, {
     String? receiverId,
   }) async {
+    final senderId = LocalStorage().getOrGenerateBhaiDeviceId();
     final response = await ApiClient().post(
       '/chat/conversations/$conversationId/messages',
       {
         'client_message_id': clientMessageId,
         'message': message,
         'transport': 'INTERNET',
+        'sender_id': senderId,
         if (receiverId != null) 'receiver_id': receiverId,
       },
     );

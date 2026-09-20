@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
@@ -27,10 +28,18 @@ class _EmergencyReceivedDialogState extends State<EmergencyReceivedDialog>
   bool _hasResponded = false;
   bool _hasReached = false;
   double? _calculatedDistanceMeters;
+  double? _liveLat;
+  double? _liveLon;
+  DateTime? _lastLocationUpdate;
+  Timer? _liveSyncTimer;
 
   @override
   void initState() {
     super.initState();
+    _liveLat = widget.alert.latitude;
+    _liveLon = widget.alert.longitude;
+    _lastLocationUpdate = widget.alert.triggeredAt;
+
     _pulseController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 800),
@@ -40,24 +49,58 @@ class _EmergencyReceivedDialogState extends State<EmergencyReceivedDialog>
     );
 
     _calculateRealDistance();
+    _startLiveLocationTracking();
+  }
+
+  void _startLiveLocationTracking() {
+    _liveSyncTimer?.cancel();
+    _liveSyncTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
+      try {
+        final res = await ApiClient().get('/emergencies/active');
+        if (res is List && res.isNotEmpty) {
+          for (final item in res) {
+            final id = item['id']?.toString();
+            final sender = item['sender_id']?.toString()?.toUpperCase();
+            if (id == widget.alert.emergencyId || sender == widget.alert.senderId.toUpperCase()) {
+              final lat = (item['latitude'] as num?)?.toDouble();
+              final lon = (item['longitude'] as num?)?.toDouble();
+              if (lat != null && lon != null && (lat != 0.0 || lon != 0.0)) {
+                if (mounted && (lat != _liveLat || lon != _liveLon)) {
+                  setState(() {
+                    _liveLat = lat;
+                    _liveLon = lon;
+                    _lastLocationUpdate = DateTime.now();
+                  });
+                  _calculateRealDistance();
+                }
+              }
+              break;
+            }
+          }
+        }
+      } catch (_) {}
+    });
   }
 
   @override
   void dispose() {
+    _liveSyncTimer?.cancel();
     _pulseController.dispose();
     super.dispose();
   }
 
   Future<void> _calculateRealDistance() async {
-    if (widget.alert.hasLocation && widget.alert.latitude != null && widget.alert.longitude != null) {
+    final targetLat = _liveLat ?? widget.alert.latitude;
+    final targetLon = _liveLon ?? widget.alert.longitude;
+    if (targetLat != null && targetLon != null && (targetLat != 0.0 || targetLon != 0.0)) {
       try {
         final pos = await Geolocator.getLastKnownPosition();
         if (pos != null) {
           final distance = Geolocator.distanceBetween(
             pos.latitude,
             pos.longitude,
-            widget.alert.latitude!,
-            widget.alert.longitude!,
+            targetLat,
+            targetLon,
           );
           if (mounted) {
             setState(() {
@@ -72,11 +115,10 @@ class _EmergencyReceivedDialogState extends State<EmergencyReceivedDialog>
   void _onGoingToHelp() async {
     setState(() => _hasResponded = true);
     await BluetoothService().goingToHelp(widget.alert.senderId, widget.alert.emergencyId);
-    if (widget.alert.hasLocation &&
-        widget.alert.latitude != null &&
-        widget.alert.longitude != null &&
-        (widget.alert.latitude != 0.0 || widget.alert.longitude != 0.0)) {
-      await BluetoothService().openGoogleMaps(widget.alert.latitude!, widget.alert.longitude!);
+    final targetLat = _liveLat ?? widget.alert.latitude;
+    final targetLon = _liveLon ?? widget.alert.longitude;
+    if (targetLat != null && targetLon != null && (targetLat != 0.0 || targetLon != 0.0)) {
+      await BluetoothService().openGoogleMaps(targetLat, targetLon);
     }
   }
 
@@ -104,10 +146,11 @@ class _EmergencyReceivedDialogState extends State<EmergencyReceivedDialog>
     }
   }
 
-
   void _onNavigateToPerson() async {
-    if (widget.alert.hasLocation && widget.alert.latitude != null && widget.alert.longitude != null) {
-      await BluetoothService().openGoogleMaps(widget.alert.latitude!, widget.alert.longitude!);
+    final targetLat = _liveLat ?? widget.alert.latitude;
+    final targetLon = _liveLon ?? widget.alert.longitude;
+    if (targetLat != null && targetLon != null && (targetLat != 0.0 || targetLon != 0.0)) {
+      await BluetoothService().openGoogleMaps(targetLat, targetLon);
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -127,10 +170,11 @@ class _EmergencyReceivedDialogState extends State<EmergencyReceivedDialog>
 
   @override
   Widget build(BuildContext context) {
-    final hasCoords = widget.alert.hasLocation &&
-        widget.alert.latitude != null &&
-        widget.alert.longitude != null &&
-        (widget.alert.latitude != 0.0 || widget.alert.longitude != 0.0);
+    final effectiveLat = _liveLat ?? widget.alert.latitude;
+    final effectiveLon = _liveLon ?? widget.alert.longitude;
+    final hasCoords = effectiveLat != null &&
+        effectiveLon != null &&
+        (effectiveLat != 0.0 || effectiveLon != 0.0);
 
     return PopScope(
       canPop: false,
@@ -205,61 +249,109 @@ class _EmergencyReceivedDialogState extends State<EmergencyReceivedDialog>
                   fontWeight: FontWeight.w600,
                 ),
               ),
-              const SizedBox(height: 18),
+              const SizedBox(height: 16),
 
-              // Details Information Card - REAL DATA ONLY
+              // Prominent Location Card with Direct Arrow Button
               Container(
                 width: double.infinity,
-                padding: const EdgeInsets.all(16),
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                 decoration: BoxDecoration(
                   color: const Color(0xFF1E293B),
                   borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: Colors.white12),
+                  border: Border.all(color: const Color(0xFF00BCD4).withOpacity(0.5), width: 1.5),
+                  boxShadow: [
+                    BoxShadow(
+                      color: const Color(0xFF00BCD4).withOpacity(0.15),
+                      blurRadius: 10,
+                      spreadRadius: 1,
+                    ),
+                  ],
                 ),
-                child: Column(
+                child: Row(
                   children: [
-                    _infoRow(
-                      Icons.tag,
-                      'Emergency ID',
-                      widget.alert.emergencyId,
-                      Colors.cyanAccent,
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF00BCD4).withOpacity(0.15),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.location_on, color: Color(0xFF00BCD4), size: 24),
                     ),
-                    const Divider(height: 16, color: Colors.white10),
-                    _infoRow(
-                      Icons.location_on,
-                      'Location',
-                      hasCoords
-                          ? '${widget.alert.latitude!.toStringAsFixed(5)}, ${widget.alert.longitude!.toStringAsFixed(5)}'
-                          : 'Not provided by sender (Proximity via BLE)',
-                      hasCoords ? Colors.greenAccent : Colors.grey,
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              const Text(
+                                'VICTIM LIVE LOCATION',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w900,
+                                  fontSize: 12,
+                                  letterSpacing: 0.5,
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                                decoration: BoxDecoration(
+                                  color: Colors.greenAccent.withOpacity(0.2),
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: const Text('LIVE 5s', style: TextStyle(color: Colors.greenAccent, fontSize: 8, fontWeight: FontWeight.bold)),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 3),
+                          Text(
+                            hasCoords
+                                ? '${effectiveLat!.toStringAsFixed(5)}, ${effectiveLon!.toStringAsFixed(5)}'
+                                : 'Acquiring satellite fix...',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 14,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            _calculatedDistanceMeters != null
+                                ? '~${_calculatedDistanceMeters!.toStringAsFixed(0)}m away • Click arrow to navigate'
+                                : '${widget.alert.estimatedDistance} • Click arrow to navigate',
+                            style: const TextStyle(
+                              color: Color(0xFF38BDF8),
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                    const Divider(height: 16, color: Colors.white10),
-                    _infoRow(
-                      Icons.access_time,
-                      'Time',
-                      _formatTime(widget.alert.triggeredAt),
-                      Colors.white70,
-                    ),
-                    const Divider(height: 16, color: Colors.white10),
-                    _infoRow(
-                      Icons.near_me,
-                      'Distance',
-                      _calculatedDistanceMeters != null
-                          ? '~${_calculatedDistanceMeters!.toStringAsFixed(0)} meters away\n(${widget.alert.estimatedDistance})'
-                          : widget.alert.estimatedDistance,
-                      Colors.amberAccent,
-                    ),
-                    const Divider(height: 16, color: Colors.white10),
-                    _infoRow(
-                      Icons.wifi_tethering,
-                      'Transport',
-                      '${widget.alert.source} (Direct Airwaves)',
-                      Colors.blueAccent,
+                    // Direct Navigation Arrow Button on the right side
+                    Container(
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF2563EB),
+                        borderRadius: BorderRadius.circular(12),
+                        boxShadow: [
+                          BoxShadow(
+                            color: const Color(0xFF2563EB).withOpacity(0.4),
+                            blurRadius: 6,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      child: IconButton(
+                        icon: const Icon(Icons.navigation_rounded, color: Colors.white, size: 26),
+                        tooltip: 'Navigate directly with Google Maps',
+                        onPressed: _onNavigateToPerson,
+                      ),
                     ),
                   ],
                 ),
               ),
-              const SizedBox(height: 18),
+              const SizedBox(height: 16),
 
               if (_hasResponded) ...[
                 Container(

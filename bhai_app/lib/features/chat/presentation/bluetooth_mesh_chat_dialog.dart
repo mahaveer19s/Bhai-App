@@ -258,30 +258,71 @@ class _BluetoothMeshChatDialogState extends State<BluetoothMeshChatDialog> {
                       itemCount: _messages.length,
                       itemBuilder: (context, index) {
                         final msg = _messages[index];
-                        final isMe = msg.senderId.toUpperCase() == myId.toUpperCase() || msg.senderId == 'local';
+                        final isMe = msg.senderId.trim().toUpperCase() == myId.trim().toUpperCase() ||
+                            msg.senderId == 'local' ||
+                            (LocalStorage().userId != null && msg.senderId == LocalStorage().userId);
 
                         return Align(
                           alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
                           child: Container(
                             margin: const EdgeInsets.only(bottom: 10),
-                            constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.72),
+                            constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.76),
                             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                             decoration: BoxDecoration(
-                              color: isMe ? const Color(0xFF00BCD4) : const Color(0xFF334155),
+                              color: isMe ? const Color(0xFF005C4B) : const Color(0xFF202C33),
                               borderRadius: BorderRadius.circular(16).copyWith(
                                 bottomRight: isMe ? const Radius.circular(2) : const Radius.circular(16),
                                 bottomLeft: !isMe ? const Radius.circular(2) : const Radius.circular(16),
                               ),
+                              border: Border.all(
+                                color: isMe ? const Color(0xFF00BCD4).withOpacity(0.4) : Colors.white10,
+                                width: 1,
+                              ),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withOpacity(0.2),
+                                  blurRadius: 4,
+                                  offset: const Offset(0, 2),
+                                ),
+                              ],
                             ),
                             child: Column(
                               crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
                               children: [
+                                if (!isMe) ...[
+                                  Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(
+                                        'BHAI-${msg.senderId}',
+                                        style: const TextStyle(
+                                          color: Color(0xFF38BDF8),
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 6),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                                        decoration: BoxDecoration(
+                                          color: Colors.white10,
+                                          borderRadius: BorderRadius.circular(4),
+                                        ),
+                                        child: Text(
+                                          msg.transport == 'BLUETOOTH' ? '📡 BLE' : '🌐 Cloud',
+                                          style: const TextStyle(color: Colors.white60, fontSize: 9),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 3),
+                                ],
                                 Text(
                                   msg.message,
-                                  style: TextStyle(
-                                    color: isMe ? const Color(0xFF070B14) : Colors.white,
+                                  style: const TextStyle(
+                                    color: Colors.white,
                                     fontSize: 14,
-                                    fontWeight: isMe ? FontWeight.w600 : FontWeight.normal,
+                                    height: 1.3,
                                   ),
                                 ),
                                 const SizedBox(height: 4),
@@ -291,7 +332,7 @@ class _BluetoothMeshChatDialogState extends State<BluetoothMeshChatDialog> {
                                     Text(
                                       '${msg.createdAt.hour.toString().padLeft(2, '0')}:${msg.createdAt.minute.toString().padLeft(2, '0')}',
                                       style: TextStyle(
-                                        color: isMe ? Colors.black54 : Colors.white38,
+                                        color: isMe ? const Color(0xFF8696A0) : Colors.white38,
                                         fontSize: 10,
                                       ),
                                     ),
@@ -303,8 +344,10 @@ class _BluetoothMeshChatDialogState extends State<BluetoothMeshChatDialog> {
                                             : msg.deliveryStatus == 'DELIVERED'
                                                 ? Icons.done_all_rounded
                                                 : Icons.done_rounded,
-                                        size: 13,
-                                        color: msg.deliveryStatus == 'READ' ? const Color(0xFF1E293B) : Colors.black45,
+                                        size: 14,
+                                        color: msg.deliveryStatus == 'READ'
+                                            ? const Color(0xFF53BDEB)
+                                            : const Color(0xFF8696A0),
                                       ),
                                     ],
                                   ],
