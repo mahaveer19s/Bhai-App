@@ -394,10 +394,12 @@ async def get_nearby_users(
             if dist <= radius_meters:
                 results.append(
                     NearbyUserOut(
-                        user_id=p["user_id"],
-                        display_name=p.get("display_name") or "Nearby Bhai",
+                        user_id=str(p["user_id"]),
+                        display_name=p.get("display_name") or "Nearby Bhai User",
                         distance_meters=dist,
                         is_available=True,
+                        latitude=p["latitude"],
+                        longitude=p["longitude"],
                         last_updated_at=p.get("location_updated_at") or datetime.now(UTC),
                     )
                 )
@@ -415,10 +417,12 @@ async def get_nearby_users(
                     u = await session.get(User, p.user_id)
                     results.append(
                         NearbyUserOut(
-                            user_id=p.user_id,
-                            display_name=u.display_name if u else "Nearby Bhai",
+                            user_id=str(p.user_id),
+                            display_name=u.display_name if u else "Nearby Bhai User",
                             distance_meters=round(dist),
                             is_available=True,
+                            latitude=p.last_latitude,
+                            longitude=p.last_longitude,
                             last_updated_at=p.location_updated_at or datetime.now(UTC),
                         )
                     )

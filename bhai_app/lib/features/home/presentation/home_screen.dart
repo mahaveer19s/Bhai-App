@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import '../../../../core/services/bluetooth_service.dart';
 import '../../../../core/services/emergency_service.dart';
+import '../../../../core/services/location_service.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../chat/presentation/bluetooth_mesh_chat_dialog.dart';
 import '../../emergency/presentation/emergency_received_dialog.dart';
@@ -125,6 +126,17 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       }
     });
 
+    // Acquire initial location fix and announce presence to backend for nearby discovery
+    try {
+      LocationService().getBestAvailableLocation().then((pos) {
+        if (pos != null && mounted) {
+          setState(() {
+            _currentPosition = pos;
+          });
+          _emergencyService.setHelperAvailability(true);
+        }
+      });
+    } catch (_) {}
   }
 
   Future<void> _onBhaiHelpPressed() async {

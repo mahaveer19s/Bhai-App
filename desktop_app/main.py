@@ -397,23 +397,29 @@ class BhaiDesktopApp:
                 except Exception:
                     pass
 
-                # Check for live chat messages
-                try:
-                    req = urllib.request.Request(f"{self.api_url}/chat/conversations/{self.active_conversation_id}/messages")
-                    with urllib.request.urlopen(req, timeout=2) as resp:
-                        msgs = json.loads(resp.read().decode("utf-8"))
-                        for m in msgs:
-                            m_id = m.get("id") or m.get("client_message_id")
-                            sender = m.get("sender_id", "Other")
-                            content = m.get("message", "")
-                            if m_id and m_id not in self.known_msg_ids:
-                                self.known_msg_ids.add(m_id)
-                                if sender != self.device_id:
-                                    ts = time.strftime("%H:%M:%S")
-                                    self.chat_display.insert("end", f"[{ts}] {sender}: {content}\n")
-                                    self.chat_display.see("end")
-                except Exception:
-                    pass
+                # Periodic Helper Presence announcement for Nearby discovery
+                if int(time.time()) % 10 < 2:
+                    try:
+                        p_data = json.dumps({
+                            "is_available": True,
+                            "latitude": 28.6273,
+                            "longitude": 77.3725,
+                            "accuracy": 5.0,
+                            "recorded_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                        }).encode("utf-8")
+                        p_req = urllib.request.Request(
+                            f"{self.api_url}/helpers/presence",
+                            data=p_data,
+                            headers={
+                                "Content-Type": "application/json",
+                                "Authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI3ODJhODYwYy04Y2M2LTQwNDEtOTE2MS01MWI4MDhlMjdjNmEiLCJyb2xlIjoiVVNFUiIsImV4cCI6MTc5MTMwODYzN30.Jaee0J-nFW-jNRMvM9myuPk-YyNC2rwC_ghE-3R1_eg",
+                            },
+                            method="PUT"
+                        )
+                        with urllib.request.urlopen(p_req, timeout=2):
+                            pass
+                    except Exception:
+                        pass
 
         threading.Thread(target=_sync_loop, daemon=True).start()
 

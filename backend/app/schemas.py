@@ -267,10 +267,12 @@ class LiveLocationSessionOut(APIModel):
 
 
 class NearbyUserOut(BaseModel):
-    user_id: UUID
-    display_name: str | None = "Bhai Helper"
+    user_id: str
+    display_name: str | None = "Nearby Bhai User"
     distance_meters: int
     is_available: bool = True
+    latitude: float | None = None
+    longitude: float | None = None
     last_updated_at: datetime | None = None
 
 
