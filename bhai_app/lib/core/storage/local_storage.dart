@@ -28,6 +28,21 @@ class LocalStorage {
   bool get isVolunteerMode => _settingsBox.get('volunteer_mode', defaultValue: false) as bool;
   Future<void> setVolunteerMode(bool val) async => await _settingsBox.put('volunteer_mode', val);
 
+  // --- Network API Configuration ---
+
+  String? get customApiUrl {
+    if (!Hive.isBoxOpen('settings')) return null;
+    return Hive.box('settings').get('custom_api_url') as String?;
+  }
+
+  Future<void> setCustomApiUrl(String? url) async {
+    if (url == null || url.trim().isEmpty) {
+      await _settingsBox.delete('custom_api_url');
+    } else {
+      await _settingsBox.put('custom_api_url', url.trim());
+    }
+  }
+
   // --- Auth Session Caching ---
 
   Future<String?> getToken() => _secureStorage.read(key: 'bhai_access_token');

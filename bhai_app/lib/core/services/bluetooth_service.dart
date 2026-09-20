@@ -88,8 +88,6 @@ class BluetoothService {
 
   StreamSubscription<dynamic>? _eventSubscription;
   final Map<String, BhaiNearbyDevice> _detectedDevices = {};
-  DateTime? _lastAlertNotificationTime;
-  String? _lastAlertSenderId;
   Timer? _networkSyncTimer;
   final Set<String> _handledEmergencyIds = {};
   final List<Map<String, dynamic>> _offlineEmergencyQueue = [];
@@ -749,8 +747,6 @@ class BluetoothService {
 
             if (isForMe) {
               _handledEmergencyIds.add(alertEmId.toUpperCase());
-              _lastAlertSenderId = senderId;
-              _lastAlertNotificationTime = now;
 
               // Trigger high-priority emergency notification
               NotificationService().showNearbyBluetoothAlert(

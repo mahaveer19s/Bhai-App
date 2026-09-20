@@ -20,13 +20,20 @@ class ApiClient {
   factory ApiClient() => _instance;
 
   static String get _baseUrl {
+    try {
+      final custom = LocalStorage().customApiUrl;
+      if (custom != null && custom.trim().isNotEmpty) {
+        return custom.trim();
+      }
+    } catch (_) {}
+
     const envUrl = String.fromEnvironment('BHAI_API_URL');
     if (envUrl.isNotEmpty) return envUrl;
     if (kIsWeb) {
       final host = Uri.base.host.isNotEmpty ? Uri.base.host : 'localhost';
       return 'http://$host:8000';
     }
-    return 'http://192.168.1.3:8000';
+    return 'http://10.140.120.82:8000';
   }
 
   Future<dynamic> get(String path) => _request('GET', path);
@@ -49,15 +56,15 @@ class ApiClient {
     try {
       switch (method) {
         case 'GET':
-          response = await http.get(uri, headers: headers).timeout(const Duration(seconds: 12));
+          response = await http.get(uri, headers: headers).timeout(const Duration(seconds: 4));
         case 'POST':
-          response = await http.post(uri, headers: headers, body: jsonEncode(body ?? {})).timeout(const Duration(seconds: 12));
+          response = await http.post(uri, headers: headers, body: jsonEncode(body ?? {})).timeout(const Duration(seconds: 4));
         case 'PUT':
-          response = await http.put(uri, headers: headers, body: jsonEncode(body ?? {})).timeout(const Duration(seconds: 12));
+          response = await http.put(uri, headers: headers, body: jsonEncode(body ?? {})).timeout(const Duration(seconds: 4));
         case 'PATCH':
-          response = await http.patch(uri, headers: headers, body: jsonEncode(body ?? {})).timeout(const Duration(seconds: 12));
+          response = await http.patch(uri, headers: headers, body: jsonEncode(body ?? {})).timeout(const Duration(seconds: 4));
         case 'DELETE':
-          response = await http.delete(uri, headers: headers).timeout(const Duration(seconds: 12));
+          response = await http.delete(uri, headers: headers).timeout(const Duration(seconds: 4));
         default:
           throw StateError('Unsupported HTTP method $method');
       }

@@ -1,5 +1,6 @@
 import logging
 from datetime import datetime, timezone
+from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -36,7 +37,7 @@ IN_MEMORY_CONVERSATIONS: list[dict] = []
 IN_MEMORY_MESSAGES: list[dict] = []
 
 
-def _find_mem_conv(conv_id: UUID) -> dict | None:
+def _find_mem_conv(conv_id: str) -> dict | None:
     for c in IN_MEMORY_CONVERSATIONS:
         if str(c["id"]) == str(conv_id):
             return c
@@ -58,32 +59,38 @@ async def create_or_get_conversation(
     conv_id = uuid4()
     victim_id = current_user.id
 
+    # Try PostgreSQL first if alert_id is a valid UUID
     try:
-        emergency = await session.get(Emergency, payload.alert_id)
+        alert_uuid = UUID(payload.alert_id)
+        emergency = await session.get(Emergency, alert_uuid)
         if emergency:
             victim_id = emergency.user_id
             is_victim = current_user.id == emergency.user_id
             if not is_victim and not is_admin:
-                helper_id = current_user.id
+                helper_id = str(current_user.id)
 
             query = select(Conversation).where(
-                Conversation.alert_id == payload.alert_id,
+                Conversation.alert_id == alert_uuid,
                 Conversation.is_admin_thread == is_admin_thread,
             )
             if is_admin_thread:
                 conv = await session.scalar(query)
             elif helper_id:
-                query = query.where(Conversation.helper_user_id == helper_id)
-                conv = await session.scalar(query)
+                try:
+                    h_uuid = UUID(str(helper_id))
+                    query = query.where(Conversation.helper_user_id == h_uuid)
+                    conv = await session.scalar(query)
+                except Exception:
+                    conv = await session.scalar(query)
             else:
                 conv = await session.scalar(query)
 
             if not conv:
                 conv = Conversation(
                     id=conv_id,
-                    alert_id=payload.alert_id,
+                    alert_id=alert_uuid,
                     victim_user_id=victim_id,
-                    helper_user_id=helper_id if not is_admin_thread else None,
+                    helper_user_id=UUID(str(helper_id)) if (helper_id and not is_admin_thread) else None,
                     is_admin_thread=is_admin_thread,
                     status=ConversationStatus.ACTIVE.value,
                 )
@@ -95,17 +102,17 @@ async def create_or_get_conversation(
     except Exception:
         pass
 
-    # Resilient fallback
+    # Resilient in-memory fallback
     for c in IN_MEMORY_CONVERSATIONS:
         if str(c["alert_id"]) == str(payload.alert_id) and c["is_admin_thread"] == is_admin_thread:
             if is_admin_thread or not helper_id or str(c.get("helper_user_id")) == str(helper_id):
                 return ConversationOut(**c)
 
     mem_conv = {
-        "id": conv_id,
-        "alert_id": payload.alert_id,
-        "victim_user_id": victim_id,
-        "helper_user_id": helper_id if not is_admin_thread else None,
+        "id": str(conv_id),
+        "alert_id": str(payload.alert_id),
+        "victim_user_id": str(victim_id),
+        "helper_user_id": str(helper_id) if not is_admin_thread and helper_id else None,
         "is_admin_thread": is_admin_thread,
         "status": ConversationStatus.ACTIVE.value,
         "created_at": now_utc,
@@ -116,15 +123,17 @@ async def create_or_get_conversation(
 
 @router.get("/conversations", response_model=list[ConversationOut])
 async def list_conversations(
-    alert_id: UUID | None = Query(None),
+    alert_id: str | None = Query(None),
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[ConversationOut]:
     """List active emergency conversations authorized for the current user."""
     try:
-        query = select(Conversation)
         if alert_id:
-            query = query.where(Conversation.alert_id == alert_id)
+            alert_uuid = UUID(alert_id)
+            query = select(Conversation).where(Conversation.alert_id == alert_uuid)
+        else:
+            query = select(Conversation)
 
         if current_user.role != UserRole.ADMIN.value:
             query = query.where(
@@ -149,7 +158,7 @@ async def list_conversations(
 
 @router.get("/conversations/{conversation_id}/messages", response_model=list[ChatMessageOut])
 async def list_messages(
-    conversation_id: UUID,
+    conversation_id: str,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     current_user: User = Depends(get_current_user),
@@ -157,7 +166,8 @@ async def list_messages(
 ) -> list[ChatMessageOut]:
     """Retrieve ordered chat messages for an authorized emergency conversation."""
     try:
-        conversation = await session.get(Conversation, conversation_id)
+        c_uuid = UUID(conversation_id)
+        conversation = await session.get(Conversation, c_uuid)
         if conversation:
             authorized = (
                 current_user.role == UserRole.ADMIN.value
@@ -169,7 +179,7 @@ async def list_messages(
 
             query = (
                 select(ChatMessage)
-                .where(ChatMessage.conversation_id == conversation_id)
+                .where(ChatMessage.conversation_id == c_uuid)
                 .order_by(ChatMessage.created_at.asc())
                 .limit(limit)
                 .offset(offset)
@@ -183,16 +193,14 @@ async def list_messages(
 
     # Resilient in-memory fallback
     mem_c = _find_mem_conv(conversation_id)
-    if not mem_c:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found.")
-
-    authorized = (
-        current_user.role == UserRole.ADMIN.value
-        or str(current_user.id) == str(mem_c["victim_user_id"])
-        or (mem_c.get("helper_user_id") and str(current_user.id) == str(mem_c["helper_user_id"]))
-    )
-    if not authorized:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Unauthorized conversation access.")
+    if mem_c:
+        authorized = (
+            current_user.role == UserRole.ADMIN.value
+            or str(current_user.id) == str(mem_c["victim_user_id"])
+            or (mem_c.get("helper_user_id") and str(current_user.id) == str(mem_c["helper_user_id"]))
+        )
+        if not authorized:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Unauthorized conversation access.")
 
     matched = [
         ChatMessageOut(**m)
@@ -204,7 +212,7 @@ async def list_messages(
 
 @router.post("/conversations/{conversation_id}/messages", response_model=ChatMessageOut, status_code=status.HTTP_201_CREATED)
 async def send_message(
-    conversation_id: UUID,
+    conversation_id: str,
     payload: ChatMessageCreate,
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
@@ -213,8 +221,10 @@ async def send_message(
     now_utc = datetime.now(timezone.utc)
     msg_id = uuid4()
 
+    # Try DB insertion if conversation is a UUID in database
     try:
-        conversation = await session.get(Conversation, conversation_id)
+        c_uuid = UUID(conversation_id)
+        conversation = await session.get(Conversation, c_uuid)
         if conversation:
             authorized = (
                 current_user.role == UserRole.ADMIN.value
@@ -226,7 +236,7 @@ async def send_message(
 
             existing = await session.scalar(
                 select(ChatMessage).where(
-                    ChatMessage.conversation_id == conversation_id,
+                    ChatMessage.conversation_id == c_uuid,
                     ChatMessage.client_message_id == payload.client_message_id,
                 )
             )
@@ -236,12 +246,17 @@ async def send_message(
             receiver_id = payload.receiver_id or (
                 conversation.helper_user_id if current_user.id == conversation.victim_user_id else conversation.victim_user_id
             )
+            try:
+                r_uuid = UUID(str(receiver_id)) if receiver_id else None
+            except Exception:
+                r_uuid = None
+
             msg = ChatMessage(
                 id=msg_id,
-                conversation_id=conversation_id,
+                conversation_id=c_uuid,
                 client_message_id=payload.client_message_id,
                 sender_id=current_user.id,
-                receiver_id=receiver_id,
+                receiver_id=r_uuid,
                 message=payload.message.strip(),
                 transport=payload.transport,
                 delivery_status=MessageDeliveryStatus.SENT.value,
@@ -254,8 +269,8 @@ async def send_message(
             msg_dict = msg_out.model_dump(mode="json")
             await chat_connections.broadcast(conversation_id, "new_message", msg_dict)
             if receiver_id:
-                await chat_connections.send_to_user(receiver_id, "new_message", msg_dict)
-            await emergency_connections.broadcast(conversation.alert_id, "chat_message", msg_dict)
+                await chat_connections.send_to_user(str(receiver_id), "new_message", msg_dict)
+            await emergency_connections.broadcast(str(conversation.alert_id), "chat_message", msg_dict)
             await emergency_connections.broadcast_to_admin("chat_message", msg_dict)
             return msg_out
     except HTTPException:
@@ -263,32 +278,34 @@ async def send_message(
     except Exception:
         pass
 
-    # Resilient in-memory path
+    # Resilient in-memory path (Supports any conversation_id like 'default-emergency-channel', 'emergency-room', etc.)
     mem_c = _find_mem_conv(conversation_id)
     if not mem_c:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found.")
-
-    authorized = (
-        current_user.role == UserRole.ADMIN.value
-        or str(current_user.id) == str(mem_c["victim_user_id"])
-        or (mem_c.get("helper_user_id") and str(current_user.id) == str(mem_c["helper_user_id"]))
-    )
-    if not authorized:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Unauthorized conversation access.")
+        mem_c = {
+            "id": conversation_id,
+            "alert_id": "BHAI-EMERGENCY",
+            "victim_user_id": str(current_user.id),
+            "helper_user_id": str(payload.receiver_id) if payload.receiver_id else None,
+            "is_admin_thread": False,
+            "status": ConversationStatus.ACTIVE.value,
+            "created_at": now_utc,
+        }
+        IN_MEMORY_CONVERSATIONS.append(mem_c)
 
     for m in IN_MEMORY_MESSAGES:
         if str(m["conversation_id"]) == str(conversation_id) and m["client_message_id"] == payload.client_message_id:
             return ChatMessageOut(**m)
 
-    receiver_id = payload.receiver_id or (
+    sender_str = payload.sender_id or str(current_user.id)
+    receiver_str = payload.receiver_id or (
         mem_c.get("helper_user_id") if str(current_user.id) == str(mem_c["victim_user_id"]) else mem_c.get("victim_user_id")
     )
     mem_msg = {
-        "id": msg_id,
+        "id": str(msg_id),
         "conversation_id": conversation_id,
         "client_message_id": payload.client_message_id,
-        "sender_id": current_user.id,
-        "receiver_id": receiver_id,
+        "sender_id": sender_str,
+        "receiver_id": str(receiver_str) if receiver_str else None,
         "message": payload.message.strip(),
         "transport": payload.transport,
         "delivery_status": MessageDeliveryStatus.SENT.value,
@@ -300,21 +317,16 @@ async def send_message(
     msg_out = ChatMessageOut(**mem_msg)
     msg_dict = msg_out.model_dump(mode="json")
     await chat_connections.broadcast(conversation_id, "new_message", msg_dict)
-    if receiver_id:
-        try:
-            from uuid import UUID as _UUID
-            await chat_connections.send_to_user(_UUID(str(receiver_id)), "new_message", msg_dict)
-        except Exception:
-            pass
-    await emergency_connections.broadcast(mem_c["alert_id"], "chat_message", msg_dict)
+    if receiver_str:
+        await chat_connections.send_to_user(str(receiver_str), "new_message", msg_dict)
+    await emergency_connections.broadcast(str(mem_c["alert_id"]), "chat_message", msg_dict)
     await emergency_connections.broadcast_to_admin("chat_message", msg_dict)
     return msg_out
 
 
-
 @router.post("/messages/{message_id}/status", response_model=ChatMessageOut)
 async def update_message_status(
-    message_id: UUID,
+    message_id: str,
     payload: MessageStatusUpdate,
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
@@ -322,7 +334,8 @@ async def update_message_status(
     """Update delivery/read receipts for an emergency message."""
     now = datetime.now(timezone.utc)
     try:
-        msg = await session.get(ChatMessage, message_id)
+        m_uuid = UUID(message_id)
+        msg = await session.get(ChatMessage, m_uuid)
         if msg:
             msg.delivery_status = payload.delivery_status
             if payload.delivery_status == "DELIVERED" and not msg.delivered_at:
@@ -335,14 +348,14 @@ async def update_message_status(
             await session.commit()
             await session.refresh(msg)
             msg_out = ChatMessageOut.model_validate(msg)
-            await chat_connections.broadcast(msg.conversation_id, "status_update", msg_out.model_dump(mode="json"))
+            await chat_connections.broadcast(str(msg.conversation_id), "status_update", msg_out.model_dump(mode="json"))
             return msg_out
     except Exception:
         pass
 
     # In-memory update
     for m in IN_MEMORY_MESSAGES:
-        if str(m["id"]) == str(message_id):
+        if str(m["id"]) == str(message_id) or str(m.get("client_message_id")) == str(message_id):
             m["delivery_status"] = payload.delivery_status
             if payload.delivery_status == "DELIVERED" and not m.get("delivered_at"):
                 m["delivered_at"] = now
@@ -351,7 +364,7 @@ async def update_message_status(
                 if not m.get("delivered_at"):
                     m["delivered_at"] = now
             msg_out = ChatMessageOut(**m)
-            await chat_connections.broadcast(m["conversation_id"], "status_update", msg_out.model_dump(mode="json"))
+            await chat_connections.broadcast(str(m["conversation_id"]), "status_update", msg_out.model_dump(mode="json"))
             return msg_out
 
     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found.")

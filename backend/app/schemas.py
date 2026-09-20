@@ -138,16 +138,16 @@ class EmergencyResponseOut(APIModel):
 
 
 class ConversationCreate(BaseModel):
-    alert_id: UUID
-    helper_user_id: UUID | None = None
+    alert_id: str
+    helper_user_id: str | None = None
     is_admin_thread: bool = False
 
 
 class ConversationOut(APIModel):
-    id: UUID
-    alert_id: UUID
-    victim_user_id: UUID
-    helper_user_id: UUID | None = None
+    id: str
+    alert_id: str
+    victim_user_id: str
+    helper_user_id: str | None = None
     is_admin_thread: bool
     status: str
     created_at: datetime
@@ -156,18 +156,19 @@ class ConversationOut(APIModel):
 
 
 class ChatMessageCreate(BaseModel):
-    client_message_id: str = Field(min_length=6, max_length=96)
+    client_message_id: str = Field(min_length=3, max_length=96)
     message: str = Field(min_length=1, max_length=2000)
-    transport: str = Field(default="INTERNET", pattern=r"^(INTERNET|BLUETOOTH)$")
-    receiver_id: UUID | None = None
+    transport: str = Field(default="INTERNET")
+    receiver_id: str | None = None
+    sender_id: str | None = None
 
 
 class ChatMessageOut(APIModel):
-    id: UUID
-    conversation_id: UUID
+    id: str
+    conversation_id: str
     client_message_id: str
-    sender_id: UUID
-    receiver_id: UUID | None = None
+    sender_id: str
+    receiver_id: str | None = None
     message: str
     transport: str
     delivery_status: str

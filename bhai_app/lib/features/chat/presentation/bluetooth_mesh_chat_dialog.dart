@@ -47,7 +47,12 @@ class _BluetoothMeshChatDialogState extends State<BluetoothMeshChatDialog> {
     _chatService.initialize();
     _initConversation();
     _checkTransportStatus();
-    _statusTimer = Timer.periodic(const Duration(seconds: 4), (_) => _checkTransportStatus());
+    _statusTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+      _checkTransportStatus();
+      if (_conversationId.isNotEmpty) {
+        _chatService.refreshMessages(_conversationId);
+      }
+    });
   }
 
   Future<void> _checkTransportStatus() async {
@@ -79,6 +84,9 @@ class _BluetoothMeshChatDialogState extends State<BluetoothMeshChatDialog> {
     });
 
     await _chatService.refreshMessages(conv.id);
+    if (mounted) {
+      setState(() => _messages = _chatService.getMessages(conv.id));
+    }
   }
 
   @override
@@ -100,7 +108,12 @@ class _BluetoothMeshChatDialogState extends State<BluetoothMeshChatDialog> {
       message: trimmed,
       receiverId: widget.helperId,
     );
-    _scrollToBottom();
+    if (mounted) {
+      setState(() {
+        _messages = _chatService.getMessages(_conversationId);
+      });
+      _scrollToBottom();
+    }
   }
 
   void _scrollToBottom() {

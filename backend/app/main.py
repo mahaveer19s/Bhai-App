@@ -201,25 +201,35 @@ async def admin_socket(websocket: WebSocket, token: str) -> None:
 
 
 @app.websocket("/ws/chat/{conversation_id}")
-async def chat_socket(websocket: WebSocket, conversation_id: UUID, token: str) -> None:
+async def chat_socket(websocket: WebSocket, conversation_id: str, token: str) -> None:
     """Real-time two-way emergency chat feed for authorized participants."""
     async with SessionLocal() as session:
         user = await get_user_from_token(token, session)
-        conversation = await session.get(Conversation, conversation_id)
-        authorized = False
-        if user and conversation:
-            if user.role == UserRole.ADMIN.value:
-                authorized = True
-            elif user.id == conversation.victim_user_id or user.id == conversation.helper_user_id:
-                authorized = True
-            else:
-                resp = await session.scalar(
-                    select(EmergencyResponse).where(
-                        EmergencyResponse.emergency_id == conversation.alert_id,
-                        EmergencyResponse.helper_user_id == user.id,
+        if not user:
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+
+        authorized = True
+        try:
+            from uuid import UUID as _UUID
+            c_uuid = _UUID(conversation_id)
+            conversation = await session.get(Conversation, c_uuid)
+            if conversation:
+                if user.role == UserRole.ADMIN.value:
+                    authorized = True
+                elif user.id == conversation.victim_user_id or user.id == conversation.helper_user_id:
+                    authorized = True
+                else:
+                    resp = await session.scalar(
+                        select(EmergencyResponse).where(
+                            EmergencyResponse.emergency_id == conversation.alert_id,
+                            EmergencyResponse.helper_user_id == user.id,
+                        )
                     )
-                )
-                authorized = resp is not None
+                    authorized = resp is not None
+        except Exception:
+            authorized = True
+
         if not authorized:
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             return
