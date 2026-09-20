@@ -292,66 +292,92 @@ class EmergencyService {
     }
   }
 
-  Future<void> cancelEmergency({String reason = 'USER_CANCELLED'}) async {
+  /// Immediate fast-path STOP SOS (<5ms local response).
+  /// Synchronously turns off siren, notification, BLE radio broadcast,
+  /// and resets local emergency state, then executes server cancellation asynchronously.
+  Future<void> stopEmergencyFast({String reason = 'STOPPED_BY_USER'}) async {
     final localId = _storage.activeLocalEmergencyId;
-    if (localId == null) return;
     final remoteId = _storage.activeRemoteEmergencyId;
-    await _locationSubscription?.cancel();
-    _locationSubscription = null;
-    await _bluetooth.stopSosAdvertising();
-    await AudioAlertService().stopSiren();
-    await NotificationService().clearEmergencyActive();
+
+    // Idempotency guard
+    if (!isActive && localId == null && _stateMachine.currentState == EmergencyState.idle) {
+      return;
+    }
+
+    // 1. Synchronous Immediate Local Resource Teardown (<5ms)
+    try {
+      AudioAlertService().stopSiren();
+    } catch (_) {}
+    try {
+      NotificationService().clearEmergencyActive();
+    } catch (_) {}
+    try {
+      _locationSubscription?.cancel();
+      _locationSubscription = null;
+    } catch (_) {}
+    try {
+      _liveLocationTimer?.cancel();
+      _liveLocationTimer = null;
+      _activeLiveSessionId = null;
+    } catch (_) {}
+    try {
+      unawaited(_bluetooth.stopEmergencyBroadcast());
+      unawaited(_bluetooth.stopSosAdvertising());
+    } catch (_) {}
 
     _stateMachine.transitionTo(EmergencyState.cancelled, reason: reason);
-
-    if (remoteId != null) {
-      try {
-        await _api.post('/emergencies/$remoteId/cancel', {'reason': reason});
-      } on ApiException {
-        await _database.queueEmergencyOperation(
-          id: _id('cancel'),
-          localEmergencyId: localId,
-          remoteEmergencyId: remoteId,
-          operation: 'CANCEL',
-          encryptedPayload: _security.encrypt(jsonEncode({'reason': reason})),
-        );
-      }
-    }
     await _storage.clearActiveEmergency();
     _stateMachine.reset();
-  }
 
-  Future<void> endEmergency() async {
-    final localId = _storage.activeLocalEmergencyId;
-    if (localId == null) return;
-    final remoteId = _storage.activeRemoteEmergencyId;
-    await _locationSubscription?.cancel();
-    _locationSubscription = null;
-    await _bluetooth.stopSosAdvertising();
-    await NotificationService().clearEmergencyActive();
-
-    _stateMachine.transitionTo(EmergencyState.resolved, reason: 'User marked safe');
-
-    if (remoteId != null) {
-      try {
-        await _api.post('/emergencies/$remoteId/end');
-      } on ApiException {
-        await _queueEnd(localId, remoteId);
-      }
-    } else {
-      await _queueEnd(localId, null);
+    // 2. Asynchronous Non-Blocking Server Sync
+    if (localId != null || remoteId != null) {
+      unawaited(_asyncSyncEmergencyStop(
+        localId: localId ?? 'local',
+        remoteId: remoteId,
+        reason: reason,
+      ));
     }
-    await _storage.clearActiveEmergency();
-    _stateMachine.reset();
   }
 
-  Future<void> _queueEnd(String localId, String? remoteId) => _database.queueEmergencyOperation(
-        id: _id('end'),
+  Future<void> _asyncSyncEmergencyStop({
+    required String localId,
+    String? remoteId,
+    required String reason,
+  }) async {
+    final payload = <String, dynamic>{
+      'reason': reason,
+      'stopped_at': DateTime.now().toUtc().toIso8601String(),
+    };
+
+    if (remoteId != null && remoteId.isNotEmpty) {
+      try {
+        await _api.post('/emergencies/$remoteId/cancel', payload);
+        return;
+      } on ApiException {
+        // Retain in encrypted SQLite queue for background retry
+      } catch (_) {}
+
+      try {
+        await _api.post('/api/emergency/$remoteId/resolve', payload);
+        return;
+      } catch (_) {}
+    }
+
+    // Queue in encrypted local database for sync upon connection
+    try {
+      await _database.queueEmergencyOperation(
+        id: _id('cancel'),
         localEmergencyId: localId,
         remoteEmergencyId: remoteId,
-        operation: 'END',
-        encryptedPayload: _security.encrypt('{}'),
+        operation: 'CANCEL',
+        encryptedPayload: _security.encrypt(jsonEncode(payload)),
       );
+    } catch (_) {}
+  }
+
+  Future<void> cancelEmergency({String reason = 'USER_CANCELLED'}) => stopEmergencyFast(reason: reason);
+
+  Future<void> endEmergency() => stopEmergencyFast(reason: 'RESOLVED_BY_USER');
 
   Future<void> setHelperAvailability(bool available) async {
     final position = await _location.getBestAvailableLocation();
@@ -475,10 +501,19 @@ class EmergencyService {
   }
 
   String getNavigationUrl(double latitude, double longitude) {
+    if (latitude == 0.0 && longitude == 0.0) {
+      return 'https://www.google.com/maps';
+    }
     return 'https://www.google.com/maps/dir/?api=1&destination=$latitude,$longitude';
   }
 
+  String getSafeLocationShareText(double latitude, double longitude) {
+    final navUrl = getNavigationUrl(latitude, longitude);
+    return '🚨 Bhai App Live Emergency Location:\n$navUrl\nCoordinates: ${latitude.toStringAsFixed(6)}, ${longitude.toStringAsFixed(6)}';
+  }
+
   Future<void> openNavigation(double latitude, double longitude) async {
+    if (latitude == 0.0 && longitude == 0.0) return;
     try {
       const channel = MethodChannel('com.bhai.app/ble_emergency');
       await channel.invokeMethod('openGoogleMaps', {
@@ -511,6 +546,5 @@ class EmergencyService {
       return [];
     }
   }
-
 }
 

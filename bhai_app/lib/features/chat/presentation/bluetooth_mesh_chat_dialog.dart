@@ -4,7 +4,6 @@ import '../../../../core/services/bluetooth_service.dart';
 import '../../../../core/services/chat_service.dart';
 import '../../../../core/services/chat_transport.dart';
 import '../../../../core/storage/local_storage.dart';
-import '../../../../core/theme/app_theme.dart';
 
 class BluetoothMeshChatDialog extends StatefulWidget {
   final String? alertId;

@@ -145,3 +145,57 @@ async def get_emergency(
         pass
 
     raise HTTPException(status_code=404, detail="Emergency was not found")
+
+
+@router.get("/admin/emergencies/{emergency_id}/audit")
+@router.get("/api/admin/emergencies/{emergency_id}/audit")
+async def get_emergency_audit(
+    emergency_id: UUID,
+    _: User = Depends(get_admin_user),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Retrieve full audit log & server-observed IP telemetry for an emergency (Admin only)."""
+    logs = []
+    try:
+        from app.models import EmergencyAuditLog
+
+        audit_rows = (
+            await session.scalars(
+                select(EmergencyAuditLog)
+                .where(EmergencyAuditLog.emergency_id == emergency_id)
+                .order_by(EmergencyAuditLog.created_at.asc())
+            )
+        ).all()
+        for row in audit_rows:
+            logs.append(
+                {
+                    "id": str(row.id),
+                    "emergency_id": str(row.emergency_id),
+                    "actor_user_id": str(row.actor_user_id) if row.actor_user_id else None,
+                    "action": row.action,
+                    "context": row.context,
+                    "created_at": row.created_at.isoformat(),
+                }
+            )
+    except Exception:
+        pass
+
+    if not logs:
+        for e in IN_MEMORY_EMERGENCIES:
+            if str(e["id"]) == str(emergency_id):
+                logs.append(
+                    {
+                        "id": str(uuid4()),
+                        "emergency_id": str(emergency_id),
+                        "actor_user_id": str(e.get("user_id")),
+                        "action": "EMERGENCY_CREATED",
+                        "context": {
+                            "device_status": e.get("device_status"),
+                            "client_ip": e.get("client_ip", "127.0.0.1"),
+                            "protocol_version": e.get("protocol_version", 1),
+                        },
+                        "created_at": (e.get("created_at") or datetime.now(UTC)).isoformat(),
+                    }
+                )
+    return {"emergency_id": str(emergency_id), "audit_logs": logs}
+

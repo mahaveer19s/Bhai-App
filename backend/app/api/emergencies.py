@@ -266,12 +266,22 @@ async def create_emergency(
                 recorded_at=recorded_at,
             )
         )
+        client_ip = request.client.host if request.client else None
+        forwarded_for = request.headers.get("X-Forwarded-For")
+        if forwarded_for:
+            client_ip = forwarded_for.split(",")[0].strip()
+
         session.add(
             EmergencyAuditLog(
                 emergency_id=emergency.id,
                 actor_user_id=user.id,
                 action="EMERGENCY_CREATED",
-                context={"network_status": payload.network_status, "idempotency_key": payload.idempotency_key, "is_test": payload.is_test},
+                context={
+                    "network_status": payload.network_status,
+                    "idempotency_key": payload.idempotency_key,
+                    "is_test": payload.is_test,
+                    "client_ip": client_ip,
+                },
             )
         )
 

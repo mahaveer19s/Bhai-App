@@ -2,7 +2,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
-import '../../../../core/services/api_client.dart';
 import '../../../../core/services/bluetooth_service.dart';
 import '../../../../core/services/emergency_service.dart';
 import '../../../../core/theme/app_theme.dart';
@@ -155,21 +154,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   }
 
   Future<void> _stopEmergencyBroadcast() async {
-    await _bluetooth.stopEmergencyBroadcast();
-    await _emergencyService.cancelEmergency(reason: 'STOPPED_BY_USER');
-
-    if (_isLiveLocationSharing) {
-      await _emergencyService.stopLiveLocationSharing();
-    }
-
-    if (_emergencyId != null) {
-      try {
-        await ApiClient().post('/api/emergency/$_emergencyId/resolve', {'reason': 'RESOLVED_BY_USER'});
-      } catch (_) {}
-    }
-
-    if (!mounted) return;
-
+    // 1. Immediate Synchronous Local UI Reset (<5ms)
     setState(() {
       _isBroadcastingSos = false;
       _isActivating = false;
@@ -178,12 +163,13 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       _acknowledgedHelperId = null;
       _statusMessage = 'Standby • Ready to broadcast or detect nearby emergency alerts';
     });
+
+    // 2. Synchronous Local Resource Teardown & Async Server Synchronization
+    await _emergencyService.stopEmergencyFast(reason: 'STOPPED_BY_USER');
   }
 
   Future<void> _toggleLiveLocationStream() async {
     if (_isLiveLocationSharing) {
-      await _emergencyService.stopLiveLocationSharing();
-      if (!mounted) return;
       setState(() {
         _isLiveLocationSharing = false;
         _liveSessionId = null;
@@ -191,6 +177,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           _statusMessage = 'Standby • Live location sharing stopped';
         }
       });
+      await _emergencyService.stopLiveLocationSharing();
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Live location stream stopped'),
@@ -199,7 +187,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       );
     } else {
       setState(() {
-        _statusMessage = 'Starting 5s Live Location Stream...';
+        _statusMessage = 'Acquiring GPS location...';
       });
       try {
         final sid = await _emergencyService.startLiveLocationSharing();
@@ -207,11 +195,11 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         setState(() {
           _isLiveLocationSharing = true;
           _liveSessionId = sid;
-          _statusMessage = '🟢 Live location streaming active (updates every 5s)';
+          _statusMessage = '🟢 Live location streaming active (updates every ~5s)';
         });
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('🟢 Live location sharing started (transmitting every 5s)'),
+            content: Text('🟢 Live location sharing active (transmitting first fix immediately)'),
             backgroundColor: Colors.teal,
           ),
         );
@@ -230,18 +218,19 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   void _openNavigation([double? lat, double? lon]) {
     final targetLat = lat ?? _currentPosition?.latitude ?? 28.6273;
     final targetLon = lon ?? _currentPosition?.longitude ?? 77.3725;
+    if (targetLat == 0.0 && targetLon == 0.0) return;
     _emergencyService.openNavigation(targetLat, targetLon);
   }
 
   void _shareLocationLink([double? lat, double? lon]) {
     final targetLat = lat ?? _currentPosition?.latitude ?? 28.6273;
     final targetLon = lon ?? _currentPosition?.longitude ?? 77.3725;
-    final url = _emergencyService.getNavigationUrl(targetLat, targetLon);
-    final text = '🚨 Bhai App Emergency / Live Location Coordinates:\n$url\nLatitude: $targetLat, Longitude: $targetLon';
+    if (targetLat == 0.0 && targetLon == 0.0) return;
+    final text = _emergencyService.getSafeLocationShareText(targetLat, targetLon);
     Clipboard.setData(ClipboardData(text: text));
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text('📍 Location & Navigation Link copied to clipboard!'),
+        content: Text('📍 Safe Location & Navigation Link copied to clipboard!'),
         backgroundColor: Colors.green,
       ),
     );
@@ -260,8 +249,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         longitude: _currentPosition?.longitude,
       );
 
-      // Discovery window for BLE peers
-      await Future.delayed(const Duration(milliseconds: 1200));
+      // Discovery window for BLE peers and GPS backend
+      final bleDevices = await _bluetooth.getDiscoveredBhaiDevices(timeout: const Duration(milliseconds: 1400));
       final gpsUsers = await gpsUsersFuture;
 
       // 2. Merge and deduplicate GPS and BLE results
@@ -284,8 +273,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       }
 
       // Merge active BLE peers
-      final bleDevice = await _bluetooth.findNearestBhai(timeout: const Duration(milliseconds: 1500));
-      if (bleDevice != null) {
+      for (final bleDevice in bleDevices) {
         final bid = bleDevice.deviceId.toUpperCase();
         if (unified.containsKey(bid)) {
           unified[bid]!['isBle'] = true;
@@ -634,6 +622,10 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                 _activeBroadcastCard(),
                 const SizedBox(height: 16),
               ],
+
+              // Prominent Realtime Location Card with Direct Navigation Arrow
+              _liveLocationDisplayCard(),
+              const SizedBox(height: 16),
 
               // Quick Actions: Find Nearby Bhai, Share Live Location, Google Maps Route, Share Link
               _actionButtonsGrid(),
@@ -1157,6 +1149,93 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             icon: const Icon(Icons.stop_circle, size: 18),
             label: const Text('STOP LIVE STREAM', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
             onPressed: _toggleLiveLocationStream,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _liveLocationDisplayCard() {
+    final pos = _currentPosition;
+    final lat = pos?.latitude;
+    final lon = pos?.longitude;
+    final hasCoords = lat != null && lon != null && (lat != 0.0 || lon != 0.0);
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0F172A),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.cyanAccent.withOpacity(0.3), width: 1.2),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: Colors.cyanAccent.withOpacity(0.12),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(Icons.location_on, color: Colors.cyanAccent, size: 24),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Text(
+                      '📍 LIVE LOCATION',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w900,
+                        fontSize: 13,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    if (_isLiveLocationSharing)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.greenAccent.withOpacity(0.2),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: const Text('LIVE 5s', style: TextStyle(color: Colors.greenAccent, fontSize: 9, fontWeight: FontWeight.bold)),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  hasCoords
+                      ? '${lat.toStringAsFixed(5)}, ${lon.toStringAsFixed(5)}'
+                      : 'Acquiring GPS fix...',
+                  style: const TextStyle(
+                    color: Colors.white70,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 13,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  hasCoords
+                      ? 'Accuracy ±${pos?.accuracy.toStringAsFixed(0) ?? "8"}m • Updated just now'
+                      : 'Waiting for satellite signal',
+                  style: TextStyle(
+                    color: hasCoords ? Colors.greenAccent : Colors.grey,
+                    fontSize: 11,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // Direct Navigation Arrow Button on the right side
+          IconButton(
+            icon: const Icon(Icons.navigation_rounded, color: Colors.cyanAccent, size: 28),
+            tooltip: 'Navigate via Google Maps',
+            onPressed: () => _openNavigation(lat, lon),
           ),
         ],
       ),

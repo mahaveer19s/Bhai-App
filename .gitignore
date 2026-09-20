@@ -53,6 +53,7 @@ backend/pb_data/
 **/android/local.properties
 **/android/app/release/
 *.apk
+*.zip
 backend/*.apk
 backend/app/static/*.apk
 *.spec

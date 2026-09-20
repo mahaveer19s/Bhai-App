@@ -113,14 +113,21 @@ class BluetoothService {
   Stream<BhaiEmergencyAlert> get incomingAlertsStream => _incomingAlertController.stream;
   Stream<String> get ackReceivedStream => _ackReceivedController.stream;
   Stream<Map<String, dynamic>> get incomingBleChatStream => _bleChatController.stream;
-
-
   String get myDeviceId => LocalStorage().getOrGenerateBhaiDeviceId();
   bool get isAdvertising => _isAdvertising;
   bool get isScanning => _isScanning;
   int get currentAdvertisingType => _currentAdvertisingType;
   bool get isEmergencyBroadcasting => _isAdvertising && _currentAdvertisingType == typeEmergencyAlert;
   String? get myActiveEmergencyId => _myActiveEmergencyId;
+
+  List<BhaiNearbyDevice> get discoveredDevices => _detectedDevices.values.toList();
+
+  Future<List<BhaiNearbyDevice>> getDiscoveredBhaiDevices({Duration timeout = const Duration(milliseconds: 1500)}) async {
+    if (_detectedDevices.isNotEmpty) return _detectedDevices.values.toList();
+    await startScanning();
+    await Future.delayed(timeout);
+    return _detectedDevices.values.toList();
+  }
 
   /// Check if Bluetooth is currently turned on.
   Future<bool> isBluetoothEnabled() async {
